@@ -35,6 +35,8 @@ uploads/
 backend/uploads/
 backend/data/
 *.db
+smart_academic.db
+backend/smart_academic.db
 chroma_data/
 .chroma/
 

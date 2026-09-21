@@ -8,10 +8,10 @@ export interface NavItem {
 
 export const mainNav: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: "grid", mobile: true },
-  { href: "/subjects", label: "Subjects", icon: "book", mobile: true },
-  { href: "/materials", label: "Materials", icon: "folder" },
+  { href: "/subjects", label: "My Subjects", icon: "book", mobile: true },
+  { href: "/materials", label: "Study Materials", icon: "folder" },
   { href: "/tutor", label: "AI Tutor", icon: "chat", mobile: true },
-  { href: "/planner", label: "Planner", icon: "calendar", mobile: true },
+  { href: "/planner", label: "AI Study Planner", icon: "calendar", mobile: true },
   { href: "/quizzes", label: "Quizzes", icon: "check" },
   { href: "/flashcards", label: "Flashcards", icon: "cards" },
   { href: "/performance", label: "Performance", icon: "chart" },
