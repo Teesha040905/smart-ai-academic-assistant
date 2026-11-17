@@ -1,0 +1,52 @@
+# Render Blueprint for the FastAPI backend.
+# Render dashboard -> New -> Blueprint -> pick this GitHub repo. Values marked
+# "sync: false" are asked for once in the dashboard (they are secrets / per-deployment).
+services:
+  - type: web
+    name: smart-ai-academic-assistant-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerContext: ./backend
+    dockerfilePath: ./backend/Dockerfile
+    healthCheckPath: /health
+    # Deploy only after the GitHub Actions CI checks on the commit have passed
+    autoDeployTrigger: checksPass
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URL # MongoDB Atlas connection string (mongodb+srv://...)
+        sync: false
+      - key: MONGODB_DB
+        value: smart_academic
+      - key: AI_API_KEYS # one or more Gemini/OpenAI keys, comma-separated
+        sync: false
+      - key: AI_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: AI_CHAT_MODEL
+        value: gemini-2.5-flash
+      - key: AI_EMBEDDING_MODEL
+        value: gemini-embedding-2
+      - key: FRONTEND_URL # e.g. https://smart-ai-academic-assistant.vercel.app
+        sync: false
+      - key: CORS_ORIGINS # same Vercel URL (comma-separate if several)
+        sync: false
+      - key: CORS_ORIGIN_REGEX # optional, e.g. allow Vercel preview deployments
+        value: ""
+      # Render free tier has no persistent disk: keep files and vectors in MongoDB
+      - key: FILE_STORAGE
+        value: gridfs
+      - key: VECTOR_STORE
+        value: mongo
+      - key: UPLOAD_DIR
+        value: /tmp/uploads
+      - key: MAX_UPLOAD_MB
+        value: "15"

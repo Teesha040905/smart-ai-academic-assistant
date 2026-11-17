@@ -9,31 +9,31 @@ Production-oriented full-stack academic assistant with RAG tutoring, adaptive st
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
 | Backend | FastAPI, PyMongo, Pydantic v2 |
 | Database | MongoDB 7 |
-| Vector store | ChromaDB (user-isolated metadata filtering) |
+| Vector store | MongoDB (default in production) or ChromaDB, user-isolated filtering |
 | Auth | JWT access tokens + bcrypt password hashing |
 | AI | OpenAI-compatible API (`AI_API_KEY`, `AI_BASE_URL`) |
 | Jobs | Background document processing worker |
-| Infra | Docker Compose |
+| Infra | Docker, GitHub Actions CI, Vercel (frontend) + Render (backend) + MongoDB Atlas |
 
 ## Quick start
 
 ### Prerequisites
 
-- Docker Desktop **or** Node 20+, Python 3.11+, PostgreSQL 16
+- Docker Desktop **or** Node 20+, Python 3.12+, MongoDB 7+
 - An OpenAI-compatible API key (optional for non-AI features; required for tutor/quiz/RAG)
 
 ### With Docker (recommended)
 
 ```bash
 cp .env.example .env
-# Edit .env — set JWT_SECRET and AI_API_KEY
+# Edit .env — set JWT_SECRET (32+ chars) and AI_API_KEYS
 
 docker compose up --build
 ```
 
 - Frontend: http://localhost:3000  
 - API docs: http://localhost:8000/docs  
-- Demo login: `demo@student.edu` / `DemoPass123!`
+- Optional demo data: `docker compose exec api python -m app.scripts.seed` (login `demo@student.edu` / `DemoPass123!`)
 
 ### Local development
 
@@ -43,7 +43,7 @@ cd backend
 python -m venv .venv
 # Windows: .venv\Scripts\activate
 # macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 cp ../.env.example ../.env
 python -m app.scripts.seed
 uvicorn app.main:app --reload --port 8000
@@ -53,6 +53,10 @@ cd frontend
 npm install
 npm run dev
 ```
+
+## Deployment
+
+Live deployment (Vercel + Render + MongoDB Atlas, all free tiers) and CI/CD are described step by step in [docs/deployment.md](docs/deployment.md).
 
 ## Demo scenario
 

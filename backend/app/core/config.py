@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000"
+    # Optional regex for extra allowed origins, e.g. Vercel preview URLs:
+    #   https://smart-ai-academic-assistant-.*\.vercel\.app
+    cors_origin_regex: str = ""
 
     jwt_secret: str = "change-me-to-a-long-random-secret"
     jwt_algorithm: str = "HS256"
@@ -39,12 +42,22 @@ class Settings(BaseSettings):
     ai_chat_model: str = "gpt-4o-mini"
     ai_embedding_model: str = "text-embedding-3-small"
 
+    # "auto" = ChromaDB if installed, otherwise MongoDB; or force "chroma" / "mongo" / "memory"
+    vector_store: str = "auto"
+
     upload_dir: str = "./uploads"
+    # "local" = files on disk (UPLOAD_DIR); "gridfs" = files stored inside MongoDB (use on hosts
+    # without a persistent disk, e.g. Render free tier)
+    file_storage: str = "local"
     max_upload_mb: int = 25
     allowed_extensions: str = "pdf,docx,pptx,ppt,txt,png,jpg,jpeg,webp"
 
     redis_url: str = "redis://localhost:6379/0"
     rate_limit_per_minute: int = 60
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.lower() in {"production", "prod"}
 
     @property
     def cors_origin_list(self) -> List[str]:
@@ -70,6 +83,14 @@ class Settings(BaseSettings):
         return keys
 
 
+_DEFAULT_JWT_SECRET = "change-me-to-a-long-random-secret"
+
+
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    if settings.is_production and (
+        settings.jwt_secret == _DEFAULT_JWT_SECRET or len(settings.jwt_secret) < 32
+    ):
+        raise RuntimeError("JWT_SECRET must be set to a random value of at least 32 characters in production")
+    return settings

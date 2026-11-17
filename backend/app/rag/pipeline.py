@@ -69,6 +69,71 @@ class _InMemoryVectorCollection:
         }
 
 
+class _MongoVectorCollection:
+    """Durable vector store kept in MongoDB (``vector_chunks``); cosine ranking in Python.
+
+    Fine for per-student document volumes and needs no extra service, so it suits free hosting.
+    """
+
+    _FILTER_KEYS = ("user_id", "document_id", "subject_id")
+
+    def __init__(self) -> None:
+        from app.core.database import get_database
+
+        self._col = get_database()["vector_chunks"]
+
+    def _mongo_filter(self, where: Optional[dict]) -> dict[str, Any]:
+        if not where:
+            return {}
+        conds = where["$and"] if "$and" in where else [where]
+        flt: dict[str, Any] = {}
+        for cond in conds:
+            for k, v in cond.items():
+                flt[k if k in self._FILTER_KEYS else f"metadata.{k}"] = v
+        return flt
+
+    def upsert(self, ids, embeddings, documents, metadatas):
+        from pymongo import ReplaceOne
+
+        ops = []
+        for i, _id in enumerate(ids):
+            meta = metadatas[i]
+            ops.append(
+                ReplaceOne(
+                    {"_id": _id},
+                    {
+                        "_id": _id,
+                        "user_id": meta.get("user_id"),
+                        "document_id": meta.get("document_id"),
+                        "subject_id": meta.get("subject_id"),
+                        "embedding": embeddings[i],
+                        "document": documents[i],
+                        "metadata": meta,
+                    },
+                    upsert=True,
+                )
+            )
+        if ops:
+            self._col.bulk_write(ops, ordered=False)
+
+    def delete(self, where):
+        self._col.delete_many(self._mongo_filter(where))
+
+    def query(self, query_embeddings, n_results=5, where=None, include=None):
+        q = query_embeddings[0]
+        scored = []
+        for row in self._col.find(self._mongo_filter(where), {"embedding": 1, "document": 1, "metadata": 1}):
+            scored.append((_cosine_distance(q, row["embedding"]), row))
+        scored.sort(key=lambda x: x[0])
+        top = scored[:n_results]
+        return {
+            "ids": [[t[1]["_id"] for t in top]],
+            "documents": [[t[1]["document"] for t in top]],
+            "metadatas": [[t[1]["metadata"] for t in top]],
+            "distances": [[t[0] for t in top]],
+        }
+
+
 def extract_text(path: Path, mime_type: str) -> tuple[str, Optional[int]]:
     suffix = path.suffix.lower()
     if suffix == ".pdf" or "pdf" in mime_type:
@@ -170,6 +235,13 @@ class VectorStore:
     def _ensure(self):
         if self._collection is not None:
             return
+        mode = (self.settings.vector_store or "auto").lower()
+        if mode == "mongo":
+            self._collection = _MongoVectorCollection()
+            return
+        if mode == "memory":
+            self._collection = _InMemoryVectorCollection()
+            return
         try:
             import chromadb
             from chromadb.config import Settings as ChromaSettings
@@ -195,8 +267,10 @@ class VectorStore:
                     metadata={"hnsw:space": "cosine"},
                 )
         except ImportError:
-            logger.warning("chromadb_not_installed using_memory_store")
-            self._collection = _InMemoryVectorCollection()
+            if mode == "chroma":
+                raise
+            logger.info("chromadb_not_installed using_mongo_vector_store")
+            self._collection = _MongoVectorCollection()
 
     def upsert_chunks(
         self,

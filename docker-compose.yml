@@ -1,46 +1,35 @@
+# Run the whole stack locally in production mode:
+#   cp .env.example .env   (fill in JWT_SECRET and AI keys)
+#   docker compose up --build
+# Frontend: http://localhost:3000   API: http://localhost:8000/docs
 services:
   db:
     image: mongo:7
-    ports:
-      - "27017:27017"
+    restart: unless-stopped
     volumes:
       - mongo_data:/data/db
     healthcheck:
-      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-  chroma:
-    image: chromadb/chroma:0.5.23
-    ports:
-      - "8001:8000"
-    volumes:
-      - chroma_data:/chroma/chroma
-    environment:
-      IS_PERSISTENT: "TRUE"
-      ANONYMIZED_TELEMETRY: "FALSE"
-
   api:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+    restart: unless-stopped
     env_file:
       - .env
     environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
       MONGODB_URL: mongodb://db:27017
       MONGODB_DB: smart_academic
-      CHROMA_HOST: chroma
-      CHROMA_PORT: 8000
-      REDIS_URL: redis://redis:6379/0
-      UPLOAD_DIR: /app/uploads
       FRONTEND_URL: http://localhost:3000
       CORS_ORIGINS: http://localhost:3000
+      FILE_STORAGE: local
+      UPLOAD_DIR: /app/uploads
+      VECTOR_STORE: mongo
     ports:
       - "8000:8000"
     volumes:
@@ -48,18 +37,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      chroma:
-        condition: service_started
-    command: >
-      sh -c "python -m app.scripts.seed &&
-             uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
-    environment:
-      NEXT_PUBLIC_API_URL: http://localhost:8000/api/v1
+      args:
+        NEXT_PUBLIC_API_URL: /api/v1
+        BACKEND_INTERNAL_URL: http://api:8000
+    restart: unless-stopped
     ports:
       - "3000:3000"
     depends_on:
@@ -67,5 +52,4 @@ services:
 
 volumes:
   mongo_data:
-  chroma_data:
   uploads_data:

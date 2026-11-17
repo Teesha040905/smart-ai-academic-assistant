@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import re
 from datetime import date, datetime, time, timedelta, timezone
-from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
@@ -12,6 +11,7 @@ from pymongo.database import Database
 
 from app.ai.client import AIClient
 from app.core.config import get_settings
+from app.core import file_storage
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.models import (
@@ -50,8 +50,6 @@ settings = get_settings()
 class DocumentService:
     def __init__(self, db: Database):
         self.db = db
-        self.upload_root = Path(settings.upload_dir)
-        self.upload_root.mkdir(parents=True, exist_ok=True)
 
     def list(self, user: Doc, q: Optional[str] = None, subject_id: Optional[str] = None) -> list[Doc]:
         query: dict = {"user_id": user.id}
@@ -89,11 +87,7 @@ class DocumentService:
         if len(content) > max_bytes:
             raise AppError(f"File exceeds {settings.max_upload_mb}MB limit", status_code=400)
         mime = file.content_type or "application/octet-stream"
-        safe_name = f"{uuid4().hex}.{ext}"
-        user_dir = self.upload_root / user.id
-        user_dir.mkdir(parents=True, exist_ok=True)
-        dest = user_dir / safe_name
-        dest.write_bytes(content)
+        stored = file_storage.save(user.id, ext, content, filename=filename, mime_type=mime)
 
         doc = make_document(
             user_id=user.id,
@@ -102,7 +96,7 @@ class DocumentService:
             topic_id=topic_id,
             title=title or filename,
             original_filename=filename,
-            stored_filename=str(dest.relative_to(self.upload_root)).replace("\\", "/"),
+            stored_filename=stored,
             mime_type=mime,
             file_size=len(content),
             status=DocumentStatus.pending,
@@ -119,14 +113,12 @@ class DocumentService:
     def delete(self, user: Doc, document_id: str) -> None:
         doc = self.get_owned(user, document_id)
         RAGService().store.delete_document(doc.id, user.id)
-        path = self.upload_root / doc.stored_filename
-        if path.exists():
-            path.unlink(missing_ok=True)
+        file_storage.delete(doc.stored_filename)
         repo.delete_many(self.db, "document_chunks", {"document_id": doc.id})
         repo.delete_one(self.db, "documents", {"id": doc.id})
 
-    def file_path(self, doc: Doc) -> Path:
-        return self.upload_root / doc.stored_filename
+    def file_bytes(self, doc: Doc) -> Optional[bytes]:
+        return file_storage.read_bytes(doc.stored_filename)
 
 
 def process_document_job(document_id: str) -> None:
@@ -141,8 +133,9 @@ def process_document_job(document_id: str) -> None:
         doc.progress = 10
         repo.save(db, "documents", doc)
 
-        path = Path(settings.upload_dir) / doc.stored_filename
-        raw, page_count = extract_text(path, doc.mime_type)
+        ext = doc.original_filename.rsplit(".", 1)[-1] if "." in (doc.original_filename or "") else ""
+        with file_storage.local_copy(doc.stored_filename, ext) as path:
+            raw, page_count = extract_text(path, doc.mime_type)
         text = clean_text(raw)
         doc.page_count = page_count
         doc.progress = 40

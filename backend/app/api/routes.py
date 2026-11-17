@@ -1,9 +1,10 @@
 from datetime import date
 import json
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import Response
 from pymongo.database import Database
 
 from app.core.config import get_settings
@@ -274,10 +275,18 @@ def get_document(document_id: str, user: Doc = Depends(get_current_user), db: Da
 def download_document(document_id: str, user: Doc = Depends(get_current_user), db: Database = Depends(get_db)):
     svc = DocumentService(db)
     doc = svc.get_owned(user, document_id)
-    path = svc.file_path(doc)
-    if not path.exists():
+    data = svc.file_bytes(doc)
+    if data is None:
         raise AppError("File missing", status_code=404)
-    return FileResponse(path, filename=doc.original_filename, media_type=doc.mime_type)
+    name = doc.original_filename or "download"
+    ascii_name = name.encode("ascii", "ignore").decode().replace('"', "") or "download"
+    return Response(
+        content=data,
+        media_type=doc.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+        },
+    )
 
 
 @router.delete("/documents/{document_id}")

@@ -48,6 +48,7 @@ def ensure_indexes(db: Database | None = None) -> None:
     db.topics.create_index([("user_id", ASCENDING), ("subject_id", ASCENDING)])
     db.documents.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
     db.document_chunks.create_index([("document_id", ASCENDING), ("chunk_index", ASCENDING)])
+    db.vector_chunks.create_index([("user_id", ASCENDING), ("document_id", ASCENDING)])
     db.conversations.create_index([("user_id", ASCENDING), ("updated_at", ASCENDING)])
     db.messages.create_index([("conversation_id", ASCENDING), ("created_at", ASCENDING)])
     db.study_plans.create_index([("user_id", ASCENDING), ("is_active", ASCENDING)])

@@ -113,6 +113,7 @@ class AuthService:
             "topics",
             "documents",
             "document_chunks",
+            "vector_chunks",
             "conversations",
             "messages",
             "study_plans",

@@ -340,3 +340,56 @@ def test_delete_account_removes_quiz_questions_and_answers(client):
     db = get_client()["smart_academic_test"]
     assert db.quiz_questions.count_documents({"quiz_id": quiz["id"]}) == 0
     assert db.quiz_answers.count_documents({}) == 0
+
+
+def test_document_lifecycle_with_gridfs_and_mongo_vectors(client, monkeypatch):
+    """Production storage mode (Render): files in GridFS, vectors in MongoDB."""
+    monkeypatch.setenv("FILE_STORAGE", "gridfs")
+    monkeypatch.setenv("VECTOR_STORE", "mongo")
+    get_settings.cache_clear()
+    from app.core import file_storage
+    from app.rag.pipeline import RAGService
+
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    body = b"Photosynthesis converts light energy into chemical energy in plants.\n" * 5
+    r = client.post("/api/v1/documents", files={"file": ("notes.txt", body, "text/plain")}, headers=h)
+    assert r.status_code in (200, 201), r.text
+    doc_id = r.json()["id"]
+
+    doc = client.get(f"/api/v1/documents/{doc_id}", headers=h).json()
+    assert doc["status"] == "ready", doc
+
+    db = get_client()["smart_academic_test"]
+    stored = db.documents.find_one({"id": doc_id})["stored_filename"]
+    assert stored.startswith(file_storage.GRIDFS_PREFIX)
+    assert db["uploads.files"].count_documents({}) == 1
+    assert db.vector_chunks.count_documents({"document_id": doc_id}) >= 1
+
+    user_id = db.documents.find_one({"id": doc_id})["user_id"]
+    hits = RAGService().retrieve(user_id=user_id, query="photosynthesis light energy", document_id=doc_id)
+    assert hits and "Photosynthesis" in hits[0]["content"]
+    assert RAGService().retrieve(user_id="someone-else", query="photosynthesis") == []
+
+    dl = client.get(f"/api/v1/documents/{doc_id}/download", headers=h)
+    assert dl.status_code == 200 and dl.content == body
+    assert "notes.txt" in dl.headers["content-disposition"]
+
+    assert client.delete(f"/api/v1/documents/{doc_id}", headers=h).status_code in (200, 204)
+    assert db["uploads.files"].count_documents({}) == 0
+    assert db.vector_chunks.count_documents({"document_id": doc_id}) == 0
+
+
+def test_production_requires_strong_jwt_secret(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET", "change-me-to-a-long-random-secret")
+    get_settings.cache_clear()
+    try:
+        with pytest.raises(RuntimeError):
+            get_settings()
+        monkeypatch.setenv("JWT_SECRET", "x" * 48)
+        get_settings.cache_clear()
+        assert get_settings().is_production
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
