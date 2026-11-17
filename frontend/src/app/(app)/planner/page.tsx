@@ -17,12 +17,16 @@ export default function PlannerPage() {
   const plan = useAsyncData(planLoader, []);
   const today = useAsyncData(todayLoader, []);
   const [generating, setGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
   async function generatePlan() {
     setGenerating(true);
+    setGenerateError(null);
     try {
       await api.post("/study-plans/generate", { days: 7, prefer_weak_topics: true });
       await Promise.all([plan.reload(), today.reload()]);
+    } catch (err) {
+      setGenerateError(err instanceof Error ? err.message : "Failed to generate plan");
     } finally {
       setGenerating(false);
     }
@@ -47,6 +51,12 @@ export default function PlannerPage() {
           </Button>
         }
       />
+
+      {generateError && (
+        <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-950/40 dark:text-red-300">
+          {generateError}
+        </p>
+      )}
 
       <Card>
         <CardHeader title="Today" />

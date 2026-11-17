@@ -1,22 +1,19 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { LandingPage } from "@/components/landing/LandingPage";
 import { LoadingState } from "@/components/ui/StateViews";
 
 export default function HomePage() {
-  const { user, loading } = useAuth();
-  const router = useRouter();
+  const { loading } = useAuth();
 
-  useEffect(() => {
-    if (loading) return;
-    router.replace(user ? "/dashboard" : "/login");
-  }, [loading, user, router]);
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white text-slate-900">
+        <LoadingState label="Loading…" />
+      </div>
+    );
+  }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center">
-      <LoadingState />
-    </div>
-  );
+  return <LandingPage />;
 }

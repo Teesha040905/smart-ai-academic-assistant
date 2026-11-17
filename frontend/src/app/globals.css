@@ -33,6 +33,12 @@
     @apply border-border;
   }
 
+  /* Hide default browser password reveal icon in Edge/IE/Chrome */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
@@ -61,5 +67,91 @@
 
   .bg-sidebar {
     background-color: var(--sidebar);
+  }
+}
+
+/* ── Landing v2 (reference design) ──────────────────── */
+.landing-v2 {
+  background:
+    radial-gradient(ellipse 80% 50% at 80% 20%, rgba(45, 212, 191, 0.15), transparent 55%),
+    radial-gradient(ellipse 60% 40% at 10% 80%, rgba(20, 184, 166, 0.15), transparent 50%),
+    linear-gradient(180deg, #f8fafc 0%, #ffffff 40%, #f1f5f9 100%);
+  color: #0f172a;
+}
+
+.landing-fade-up {
+  animation: landing-fade-up 0.85s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.landing-v2-glow {
+  animation: landing-glow 9s ease-in-out infinite alternate;
+}
+
+.landing-v2-glow-delay {
+  animation: landing-glow 11s ease-in-out infinite alternate-reverse;
+}
+
+.landing-float {
+  animation: landing-float 5.5s ease-in-out infinite alternate;
+}
+
+.landing-float-delay {
+  animation: landing-float 6.5s ease-in-out infinite alternate-reverse;
+}
+
+.landing-feature-card {
+  animation: landing-fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 0.25s ease, border-color 0.25s ease, background-color 0.25s ease;
+}
+
+.landing-feature-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(94, 234, 212, 0.35);
+  background-color: rgba(10, 61, 58, 0.75);
+}
+
+@keyframes landing-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes landing-float {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-10px);
+  }
+}
+
+@keyframes landing-glow {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-fade-up,
+  .landing-v2-glow,
+  .landing-v2-glow-delay,
+  .landing-float,
+  .landing-float-delay,
+  .landing-feature-card {
+    animation: none !important;
+  }
+
+  .landing-feature-card:hover {
+    transform: none;
   }
 }

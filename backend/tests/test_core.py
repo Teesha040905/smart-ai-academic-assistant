@@ -1,61 +1,59 @@
-"""Pytest suite for auth, subjects, recommendations, and isolation."""
+"""Pytest suite against MongoDB test database."""
 
 from __future__ import annotations
 
 import os
 
-os.environ["DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+os.environ["MONGODB_URL"] = "mongodb://localhost:27017"
+os.environ["MONGODB_DB"] = "smart_academic_test"
 os.environ["JWT_SECRET"] = "test-secret-key-for-pytest"
 os.environ["AI_API_KEY"] = ""
 os.environ["UPLOAD_DIR"] = "./test_uploads"
 
 from datetime import date, timedelta
+from contextlib import asynccontextmanager
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-# Clear settings cache if already loaded
 from app.core.config import get_settings
 
 get_settings.cache_clear()
 
 from app.core import database as db_module
+from app.core.database import close_client, ensure_indexes, get_client
 from app.main import create_app
-from app.models.base import Base
 from app.services.recommendation_service import days_until
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("UPLOAD_DIR", str(tmp_path / "uploads"))
+    monkeypatch.setenv("MONGODB_DB", "smart_academic_test")
     get_settings.cache_clear()
+    close_client()
+    db_module._client = None
 
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    TestingSession = sessionmaker(bind=engine, autocommit=False, autoflush=False)
-    Base.metadata.create_all(bind=engine)
-
-    db_module.engine = engine
-    db_module.SessionLocal = TestingSession
-
-    def _get_db():
-        db = TestingSession()
-        try:
-            yield db
-        finally:
-            db.close()
+    client_mongo = get_client()
+    client_mongo.drop_database("smart_academic_test")
+    ensure_indexes(client_mongo["smart_academic_test"])
 
     app = create_app()
-    app.dependency_overrides[db_module.get_db] = _get_db
+
+    @asynccontextmanager
+    async def _lifespan(_: object):
+        ensure_indexes(get_client()["smart_academic_test"])
+        yield
+
+    app.router.lifespan_context = _lifespan
     with TestClient(app) as c:
         yield c
-    app.dependency_overrides.clear()
+
+    try:
+        get_client().drop_database("smart_academic_test")
+    except Exception:
+        pass
+    close_client()
     get_settings.cache_clear()
 
 
@@ -134,9 +132,6 @@ def test_recommendation_weak_topic_and_exam_urgency(client):
         headers=h,
     ).json()["id"]
     client.patch(f"/api/v1/topics/{tid}", json={"knowledge_level": 44}, headers=h)
-    # Set quiz_average via second patch — schema supports it through TopicUpdate
-    # knowledge_level already set; update quiz via direct would need field — TopicUpdate has quiz? 
-    # TopicUpdate doesn't include quiz_average — knowledge alone + exam should trigger rec
     client.post(
         "/api/v1/exams",
         json={
@@ -183,3 +178,165 @@ def test_invalid_document_extension(client):
     files = {"file": ("malware.exe", b"abc", "application/octet-stream")}
     r = client.post("/api/v1/documents", files=files, headers=h)
     assert r.status_code == 400
+
+
+def test_plan_without_topics_uses_subjects(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    client.post("/api/v1/subjects", json={"name": "Physics"}, headers=h)
+    r = client.post("/api/v1/study-plans/generate", json={"days": 7}, headers=h)
+    assert r.status_code == 200, r.text
+    sessions = r.json()["sessions"]
+    assert sessions
+    assert {s["scheduled_date"] for s in sessions} == {
+        (date.today() + timedelta(days=i)).isoformat() for i in range(7)
+    }
+    assert sessions[0]["title"].startswith("Physics")
+
+
+def test_plan_without_subjects_is_rejected(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    r = client.post("/api/v1/study-plans/generate", json={"days": 7}, headers=h)
+    assert r.status_code == 400
+    assert "subject" in r.json()["detail"].lower()
+    assert client.get("/api/v1/study-plans/active", headers=h).json() is None
+
+
+def test_quiz_and_flashcards_use_selected_subject(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    sid = client.post("/api/v1/subjects", json={"name": "Software Testing"}, headers=h).json()["id"]
+
+    quiz = client.post("/api/v1/ai/quiz", json={"subject_id": sid, "number_of_questions": 2}, headers=h)
+    assert quiz.status_code == 200, quiz.text
+    assert quiz.json()["title"] == "Quiz: Software Testing"
+    assert quiz.json()["subject_id"] == sid
+
+    cards = client.post("/api/v1/ai/flashcards", json={"subject_id": sid, "count": 2}, headers=h)
+    assert cards.status_code == 200, cards.text
+    assert all(c["subject_id"] == sid for c in cards.json())
+
+
+def test_quiz_rejects_other_users_subject(client):
+    _register(client, email="one@test.com", name="One")
+    h1 = {"Authorization": f"Bearer {_login(client, 'one@test.com')}"}
+    sid = client.post("/api/v1/subjects", json={"name": "Private"}, headers=h1).json()["id"]
+    _register(client, email="two@test.com", name="Two")
+    h2 = {"Authorization": f"Bearer {_login(client, 'two@test.com')}"}
+    r = client.post("/api/v1/ai/quiz", json={"subject_id": sid}, headers=h2)
+    assert r.status_code == 404
+
+
+def test_quiz_submit_returns_per_question_review(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    quiz = client.post("/api/v1/ai/quiz", json={"number_of_questions": 2}, headers=h).json()
+    q1, q2 = quiz["questions"][:2]
+    r = client.post(
+        f"/api/v1/quizzes/{quiz['id']}/submit",
+        json={"answers": [
+            {"question_id": q1["id"], "user_answer": "definitely not an option"},
+            {"question_id": q2["id"], "user_answer": ""},
+        ]},
+        headers=h,
+    )
+    assert r.status_code == 200, r.text
+    review = {item["question_id"]: item for item in r.json()["review"]}
+    assert set(review) == {q1["id"], q2["id"]}
+    assert review[q1["id"]]["is_correct"] is False
+    assert review[q2["id"]]["is_correct"] is False
+    assert review[q1["id"]]["correct_answer"]
+
+    # answering with the revealed correct option scores it as right
+    right = client.post(
+        f"/api/v1/quizzes/{quiz['id']}/submit",
+        json={"answers": [{"question_id": q1["id"], "user_answer": review[q1["id"]]["correct_answer"]}]},
+        headers=h,
+    ).json()
+    assert right["review"][0]["is_correct"] is True
+    assert right["score"] == 1
+
+
+def test_recommendations_for_subjects_without_topics(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    client.post("/api/v1/subjects", json={"name": "Physics"}, headers=h)
+    with_topics = client.post("/api/v1/subjects", json={"name": "Chemistry"}, headers=h).json()["id"]
+    client.post(f"/api/v1/subjects/{with_topics}/topics", json={"name": "Bonding"}, headers=h)
+
+    recs = client.get("/api/v1/recommendations?refresh=true", headers=h).json()
+    titles = [r["title"] for r in recs]
+    assert "Practise Physics" in titles
+    assert "Focus on Bonding" in titles
+    assert "Practise Chemistry" not in titles  # covered by its topics instead
+    physics = next(r for r in recs if r["title"] == "Practise Physics")
+    assert "No quizzes taken yet" in physics["reason"]
+
+
+def test_forgot_password_does_not_leak_reset_token(client):
+    _register(client)
+    r = client.post("/api/v1/auth/forgot-password", json={"email": "a@test.com"})
+    assert r.status_code == 200
+    assert "token" not in r.text.lower()
+
+
+def test_exam_and_assignment_require_owned_subject(client):
+    _register(client, email="one@test.com", name="One")
+    h1 = {"Authorization": f"Bearer {_login(client, 'one@test.com')}"}
+    foreign = client.post("/api/v1/subjects", json={"name": "Private"}, headers=h1).json()["id"]
+    _register(client, email="two@test.com", name="Two")
+    h2 = {"Authorization": f"Bearer {_login(client, 'two@test.com')}"}
+    exam = {"subject_id": foreign, "name": "Final", "exam_date": str(date.today())}
+    assert client.post("/api/v1/exams", json=exam, headers=h2).status_code == 404
+    exam["subject_id"] = "missing"
+    assert client.post("/api/v1/exams", json=exam, headers=h2).status_code == 404
+    task = {"title": "Report", "subject_id": foreign, "deadline": "2030-01-01T10:00:00"}
+    assert client.post("/api/v1/assignments", json=task, headers=h2).status_code == 404
+
+
+def test_syllabus_input_validation(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    sid = client.post("/api/v1/subjects", json={"name": "Physics"}, headers=h).json()["id"]
+    assert client.post("/api/v1/subjects", json={"name": "physics"}, headers=h).status_code == 409
+    assert client.patch(f"/api/v1/subjects/{sid}", json={"color": "red; x"}, headers=h).status_code == 422
+    assert client.post(f"/api/v1/subjects/{sid}/units", json={"name": "  "}, headers=h).status_code == 422
+    assert client.post(f"/api/v1/subjects/{sid}/topics", json={"name": ""}, headers=h).status_code == 422
+    r = client.post(f"/api/v1/subjects/{sid}/topics", json={"name": "Optics", "importance": -1}, headers=h)
+    assert r.status_code == 422
+    r = client.post(f"/api/v1/subjects/{sid}/topics", json={"name": "  Optics  "}, headers=h)
+    assert r.status_code == 200 and r.json()["name"] == "Optics"
+
+
+def test_dashboard_streak_counts_today(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    client.post("/api/v1/subjects", json={"name": "Physics"}, headers=h)
+    session = client.post("/api/v1/study-plans/generate", json={"days": 1}, headers=h).json()["sessions"][0]
+    client.post(f"/api/v1/study-sessions/{session['id']}/complete", headers=h)
+    assert client.get("/api/v1/dashboard", headers=h).json()["streak"]["streak_days"] == 1
+
+
+def test_fallback_embeddings_are_stable_across_processes():
+    import subprocess
+    import sys
+
+    code = "from app.ai.client import AIClient; print(AIClient()._hash_embed('linked list node')[:64])"
+    runs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True).stdout for _ in range(2)}
+    assert len(runs) == 1 and runs != {""}
+
+
+def test_delete_account_removes_quiz_questions_and_answers(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    quiz = client.post("/api/v1/ai/quiz", json={"number_of_questions": 2}, headers=h).json()
+    client.post(
+        f"/api/v1/quizzes/{quiz['id']}/submit",
+        json={"answers": [{"question_id": q["id"], "user_answer": ""} for q in quiz["questions"]]},
+        headers=h,
+    )
+    assert client.delete("/api/v1/users/me", headers=h).status_code == 200
+    db = get_client()["smart_academic_test"]
+    assert db.quiz_questions.count_documents({"quiz_id": quiz["id"]}) == 0
+    assert db.quiz_answers.count_documents({}) == 0

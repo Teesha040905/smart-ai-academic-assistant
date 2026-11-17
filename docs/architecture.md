@@ -13,9 +13,9 @@ One continuous learning loop: academic data → study → quiz → performance �
                                            │
                     ┌──────────────────────┼──────────────────────┐
                     ▼                      ▼                      ▼
-             PostgreSQL              ChromaDB               AI Provider
-          (users, subjects,       (embeddings +          (chat, embed,
-           quizzes, plans)         metadata)              summarize)
+               MongoDB                 ChromaDB               AI Provider
+          (users, subjects,         (embeddings +          (chat, embed,
+           quizzes, plans)           metadata)              summarize)
                                            │
                                     Background Worker
                                   (PDF extract → chunk

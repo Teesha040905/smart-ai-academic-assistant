@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Smart AI Academic Assistant"
     environment: str = "development"
-    debug: bool = True
+    debug: bool | str = True
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000"
@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24 * 7
     bcrypt_rounds: int = 12
 
-    database_url: str = "postgresql+psycopg://saa:saa_secret@localhost:5432/smart_academic"
+    database_url: str = ""  # legacy; unused after MongoDB migration
+    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_db: str = "smart_academic"
 
     chroma_host: str = "localhost"
     chroma_port: int = 8001
@@ -32,6 +34,7 @@ class Settings(BaseSettings):
     embedding_dimensions: int = 1536
 
     ai_api_key: str = ""
+    ai_api_keys: str = ""
     ai_base_url: str = "https://api.openai.com/v1"
     ai_chat_model: str = "gpt-4o-mini"
     ai_embedding_model: str = "text-embedding-3-small"
@@ -50,6 +53,21 @@ class Settings(BaseSettings):
     @property
     def allowed_extension_set(self) -> set[str]:
         return {e.strip().lower() for e in self.allowed_extensions.split(",") if e.strip()}
+
+    @property
+    def ai_api_key_list(self) -> List[str]:
+        keys: List[str] = []
+        if self.ai_api_keys:
+            for k in self.ai_api_keys.split(","):
+                k_clean = k.strip()
+                if k_clean and k_clean not in keys:
+                    keys.append(k_clean)
+        if self.ai_api_key:
+            for k in self.ai_api_key.split(","):
+                k_clean = k.strip()
+                if k_clean and k_clean not in keys:
+                    keys.append(k_clean)
+        return keys
 
 
 @lru_cache

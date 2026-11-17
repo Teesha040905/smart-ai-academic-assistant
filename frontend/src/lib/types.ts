@@ -153,6 +153,14 @@ export interface Quiz {
   questions: QuizQuestion[];
 }
 
+export interface QuizAnswerReview {
+  question_id: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: boolean;
+  explanation?: string | null;
+}
+
 export interface QuizAttempt {
   id: string;
   quiz_id: string;
@@ -162,6 +170,7 @@ export interface QuizAttempt {
   strong_topics_json?: string | null;
   weak_topics_json?: string | null;
   completed_at?: string | null;
+  review: QuizAnswerReview[];
 }
 
 export interface Flashcard {
@@ -197,16 +206,6 @@ export interface Assignment {
   status: AssignmentStatus;
 }
 
-export interface Notification {
-  id: string;
-  title: string;
-  body: string;
-  category: string;
-  is_read: boolean;
-  link?: string | null;
-  created_at: string;
-}
-
 export interface Recommendation {
   id: string;
   topic_id?: string | null;
@@ -218,12 +217,21 @@ export interface Recommendation {
   score: number;
 }
 
+export interface WeakTopic {
+  id: string;
+  name: string;
+  subject_id: string;
+  knowledge_level: number;
+  status: "critical" | "warning" | "good";
+  quiz_average?: number | null;
+}
+
 export interface Dashboard {
   greeting: string;
   student_name: string;
   stats: Record<string, unknown>;
   today_plan: StudySession[];
-  weak_topics: Record<string, unknown>[];
+  weak_topics: WeakTopic[];
   recommendation?: Recommendation | null;
   upcoming_exams: Exam[];
   upcoming_assignments: Assignment[];

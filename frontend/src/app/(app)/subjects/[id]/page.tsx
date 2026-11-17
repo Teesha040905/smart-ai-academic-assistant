@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { FormEvent, useCallback, useState } from "react";
 import { useParams } from "next/navigation";
 import { api } from "@/lib/api";
@@ -29,6 +30,8 @@ export default function SubjectDetailPage() {
       await api.post(`/subjects/${id}/topics`, { name: topicName.trim() });
       setTopicName("");
       await reload();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to add topic");
     } finally {
       setBusy(false);
     }
@@ -45,6 +48,8 @@ export default function SubjectDetailPage() {
       });
       setUnitName("");
       await reload();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to add unit");
     } finally {
       setBusy(false);
     }
@@ -61,6 +66,12 @@ export default function SubjectDetailPage() {
 
   return (
     <div className="space-y-6">
+      <Link href="/subjects" className="inline-flex items-center gap-1.5 text-sm font-medium text-teal-600 transition-colors hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300">
+        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 12H5M12 19l-7-7 7-7" />
+        </svg>
+        Back to Subjects
+      </Link>
       <PageHeader
         title={data.name}
         description={data.description || "Subject details, units, and topics."}
@@ -75,6 +86,7 @@ export default function SubjectDetailPage() {
                 placeholder="Unit name"
                 value={unitName}
                 onChange={(e) => setUnitName(e.target.value)}
+                required
               />
               <Button type="submit" loading={busy}>
                 Add
@@ -104,6 +116,7 @@ export default function SubjectDetailPage() {
                 placeholder="Topic name"
                 value={topicName}
                 onChange={(e) => setTopicName(e.target.value)}
+                required
               />
               <Button type="submit" loading={busy}>
                 Add

@@ -4,7 +4,7 @@ const TOKEN_KEY = "saa_access_token";
 
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") ||
-  "http://localhost:8000/api/v1";
+  (typeof window !== "undefined" ? "/api/v1" : "http://127.0.0.1:8000/api/v1");
 
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
@@ -66,10 +66,16 @@ export async function apiRequest<T>(
   }
 
   if (!res.ok) {
-    const detail =
+    const raw =
       typeof data === "object" && data && "detail" in data
-        ? String((data as { detail: unknown }).detail)
+        ? (data as { detail: unknown }).detail
         : res.statusText;
+    // FastAPI validation errors arrive as [{ msg: "Value error, ..." }]
+    const detail = Array.isArray(raw)
+      ? raw
+          .map((e) => String((e as { msg?: unknown })?.msg ?? e).replace(/^Value error, /, ""))
+          .join(". ")
+      : String(raw);
     throw new ApiError(detail || "Request failed", res.status, detail);
   }
 

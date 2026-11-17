@@ -3,8 +3,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsyncData } from "@/lib/hooks";
-import { Quiz, QuizAttempt, Subject } from "@/lib/types";
-import { parseQuizOptions } from "@/lib/utils";
+import { Quiz, QuizAnswerReview, QuizAttempt, Subject } from "@/lib/types";
+import { cn, parseQuizOptions } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
@@ -76,6 +76,20 @@ export default function QuizzesPage() {
     }
   }
 
+  const reviewByQuestion = useMemo(
+    () =>
+      Object.fromEntries((result?.review ?? []).map((r) => [r.question_id, r])) as Record<
+        string,
+        QuizAnswerReview
+      >,
+    [result]
+  );
+
+  function retake() {
+    setResult(null);
+    setAnswers({});
+  }
+
   const optionsByQuestion = useMemo(() => {
     if (!activeQuiz) return {};
     return Object.fromEntries(
@@ -116,33 +130,83 @@ export default function QuizzesPage() {
         <Card>
           <CardHeader title={activeQuiz.title} description={`${activeQuiz.question_count} questions`} />
           <CardBody className="space-y-4">
-            {activeQuiz.questions.map((q, idx) => (
-              <div key={q.id} className="space-y-2 rounded-lg border border-slate-200/80 p-3 dark:border-slate-800">
-                <p className="text-sm font-medium">
-                  {idx + 1}. {q.prompt}
-                </p>
-                {(optionsByQuestion[q.id]?.length ? optionsByQuestion[q.id] : ["A", "B", "C", "D"]).map(
-                  (opt) => (
-                    <label key={opt} className="flex items-center gap-2 text-sm">
-                      <input
-                        type="radio"
-                        name={q.id}
-                        checked={answers[q.id] === opt}
-                        onChange={() => setAnswers((a) => ({ ...a, [q.id]: opt }))}
-                      />
-                      {opt}
-                    </label>
-                  )
-                )}
-              </div>
-            ))}
-            <Button onClick={submitQuiz} loading={submitting}>
-              Submit answers
-            </Button>
             {result && (
-              <p className="text-sm font-medium text-teal-800 dark:text-teal-200">
-                Score: {result.percentage.toFixed(0)}% ({result.score}/{result.max_score})
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-teal-50 px-4 py-3 dark:bg-teal-950/40">
+                <p className="text-sm font-semibold text-teal-900 dark:text-teal-100">
+                  Score: {result.percentage.toFixed(0)}% ({result.score}/{result.max_score} correct)
+                </p>
+                <Button size="sm" variant="secondary" onClick={retake}>
+                  Retake
+                </Button>
+              </div>
+            )}
+            {activeQuiz.questions.map((q, idx) => {
+              const review = reviewByQuestion[q.id];
+              const answered = !!review?.user_answer;
+              return (
+                <div
+                  key={q.id}
+                  className={cn(
+                    "space-y-2 rounded-lg border p-3",
+                    !review && "border-slate-200/80 dark:border-slate-800",
+                    review?.is_correct && "border-green-300 dark:border-green-800",
+                    review && !review.is_correct && "border-red-300 dark:border-red-800"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="text-sm font-medium">
+                      {idx + 1}. {q.prompt}
+                    </p>
+                    {review && (
+                      <Badge tone={review.is_correct ? "green" : "red"}>
+                        {review.is_correct ? "Correct" : answered ? "Incorrect" : "Not answered"}
+                      </Badge>
+                    )}
+                  </div>
+                  {(optionsByQuestion[q.id]?.length ? optionsByQuestion[q.id] : ["A", "B", "C", "D"]).map(
+                    (opt) => {
+                      const isCorrectOption = review && opt === review.correct_answer;
+                      const isWrongPick = review && !review.is_correct && opt === review.user_answer;
+                      return (
+                        <label
+                          key={opt}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1 text-sm",
+                            isCorrectOption && "bg-green-50 font-medium text-green-800 dark:bg-green-950/40 dark:text-green-300",
+                            isWrongPick && "bg-red-50 text-red-700 line-through dark:bg-red-950/40 dark:text-red-300"
+                          )}
+                        >
+                          <input
+                            type="radio"
+                            name={q.id}
+                            checked={answers[q.id] === opt}
+                            disabled={!!result}
+                            onChange={() => setAnswers((a) => ({ ...a, [q.id]: opt }))}
+                          />
+                          <span className="flex-1">{opt}</span>
+                          {isCorrectOption && <span aria-label="Correct answer">✓</span>}
+                          {isWrongPick && <span aria-label="Your answer">✗</span>}
+                        </label>
+                      );
+                    }
+                  )}
+                  {review && !optionsByQuestion[q.id]?.length && !review.is_correct && (
+                    <p className="text-sm text-green-800 dark:text-green-300">
+                      Correct answer: {review.correct_answer}
+                    </p>
+                  )}
+                  {review?.explanation && (
+                    <p className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600 dark:bg-slate-900/60 dark:text-slate-300">
+                      {review.explanation}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+            {!result && (
+              <Button onClick={submitQuiz} loading={submitting}>
+                Submit answers
+              </Button>
             )}
           </CardBody>
         </Card>

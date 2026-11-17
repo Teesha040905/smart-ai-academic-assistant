@@ -19,6 +19,13 @@ const paths: Record<string, string> = {
   sun: "M12 4V2m0 20v-2M4 12H2m20 0h-2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5M12 8a4 4 0 100 8 4 4 0 000-8z",
   moon: "M21 14.5A8.5 8.5 0 1112.5 3a6.5 6.5 0 009.5 11.5z",
   logout: "M10 4H5v16h5M14 12H8m6 0l-3-3m3 3l-3 3",
+  "arrow-up": "M12 19V5M5 12l7-7 7 7",
+  "chevron-left": "M15 18l-6-6 6-6",
+  "chevron-right": "M9 18l6-6-6-6",
+  "sidebar": "M5 3a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2H5zm4 0v18",
+  download: "M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2",
+  trash: "M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V4h6v3",
+  document: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
 };
 
 export function Icon({

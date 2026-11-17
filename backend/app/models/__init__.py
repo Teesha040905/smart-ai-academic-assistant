@@ -1,23 +1,12 @@
+"""Domain enums and MongoDB document factories."""
+
+from __future__ import annotations
+
 import enum
 from datetime import date, datetime, time
-from typing import Optional
+from typing import Any, Optional
 
-from sqlalchemy import (
-    Boolean,
-    Date,
-    DateTime,
-    Enum,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    Time,
-    UniqueConstraint,
-)
-from sqlalchemy.orm import Mapped, mapped_column, relationship
-
-from app.models.base import Base, TimestampMixin, UUIDPrimaryKey, new_uuid
+from app.models.doc import Doc, from_mongo, new_uuid, register_enum_fields, touch, utcnow
 
 
 class UserRole(str, enum.Enum):
@@ -72,347 +61,434 @@ class Priority(str, enum.Enum):
     high = "high"
 
 
-class User(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "users"
-
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
-    role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.student, nullable=False)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    theme: Mapped[str] = mapped_column(String(20), default="system", nullable=False)
-
-    profile: Mapped[Optional["StudentProfile"]] = relationship(back_populates="user", uselist=False)
-    subjects: Mapped[list["Subject"]] = relationship(back_populates="user")
+register_enum_fields(
+    {
+        "role": UserRole,
+        "difficulty": Difficulty,
+        "priority": Priority,
+        "question_type": QuestionType,
+    }
+)
 
 
-class StudentProfile(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "student_profiles"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
-    photo_url: Mapped[Optional[str]] = mapped_column(String(500))
-    course: Mapped[Optional[str]] = mapped_column(String(120))
-    branch: Mapped[Optional[str]] = mapped_column(String(120))
-    semester: Mapped[Optional[int]] = mapped_column(Integer)
-    academic_year: Mapped[Optional[str]] = mapped_column(String(40))
-    preferred_study_time: Mapped[Optional[str]] = mapped_column(String(40))  # morning/afternoon/evening
-    daily_study_hours: Mapped[float] = mapped_column(Float, default=3.0)
-    learning_preferences: Mapped[Optional[str]] = mapped_column(Text)  # JSON string
-    academic_goals: Mapped[Optional[str]] = mapped_column(Text)
-    notification_prefs: Mapped[Optional[str]] = mapped_column(Text)  # JSON
-    ai_prefs: Mapped[Optional[str]] = mapped_column(Text)  # JSON
-
-    user: Mapped["User"] = relationship(back_populates="profile")
+def _base(**extra: Any) -> dict[str, Any]:
+    now = utcnow()
+    uid = new_uuid()
+    data = {"id": uid, "created_at": now, "updated_at": now}
+    data.update(extra)
+    return data
 
 
-class Subject(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "subjects"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    code: Mapped[Optional[str]] = mapped_column(String(40))
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    color: Mapped[str] = mapped_column(String(20), default="#2563eb")
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.medium)
-    exam_date: Mapped[Optional[date]] = mapped_column(Date)
-
-    user: Mapped["User"] = relationship(back_populates="subjects")
-    units: Mapped[list["Unit"]] = relationship(back_populates="subject", cascade="all, delete-orphan")
-    topics: Mapped[list["Topic"]] = relationship(back_populates="subject", cascade="all, delete-orphan")
-
-
-class Unit(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "units"
-
-    subject_id: Mapped[str] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    order_index: Mapped[int] = mapped_column(Integer, default=0)
-    progress_override: Mapped[Optional[float]] = mapped_column(Float)  # optional manual %
-
-    subject: Mapped["Subject"] = relationship(back_populates="units")
-    topics: Mapped[list["Topic"]] = relationship(back_populates="unit", cascade="all, delete-orphan")
-
-
-class Topic(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "topics"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[str] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
-    unit_id: Mapped[Optional[str]] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"), index=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    difficulty: Mapped[Difficulty] = mapped_column(Enum(Difficulty), default=Difficulty.medium)
-    status: Mapped[TopicStatus] = mapped_column(Enum(TopicStatus), default=TopicStatus.not_started)
-    knowledge_level: Mapped[float] = mapped_column(Float, default=0.0)  # 0-100
-    last_studied_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    revision_count: Mapped[int] = mapped_column(Integer, default=0)
-    quiz_average: Mapped[Optional[float]] = mapped_column(Float)
-    importance: Mapped[float] = mapped_column(Float, default=1.0)
-
-    subject: Mapped["Subject"] = relationship(back_populates="topics")
-    unit: Mapped[Optional["Unit"]] = relationship(back_populates="topics")
-
-
-class Document(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "documents"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    unit_id: Mapped[Optional[str]] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    title: Mapped[str] = mapped_column(String(300), nullable=False)
-    original_filename: Mapped[str] = mapped_column(String(300), nullable=False)
-    stored_filename: Mapped[str] = mapped_column(String(300), nullable=False)
-    mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
-    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    status: Mapped[DocumentStatus] = mapped_column(Enum(DocumentStatus), default=DocumentStatus.pending)
-    progress: Mapped[int] = mapped_column(Integer, default=0)
-    error_message: Mapped[Optional[str]] = mapped_column(Text)
-    page_count: Mapped[Optional[int]] = mapped_column(Integer)
-
-    chunks: Mapped[list["DocumentChunk"]] = relationship(
-        back_populates="document", cascade="all, delete-orphan"
+def make_user(**kwargs: Any) -> Doc:
+    defaults = _base(
+        email="",
+        hashed_password="",
+        full_name="",
+        role=UserRole.student,
+        is_active=True,
+        theme="system",
     )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("role"), str):
+        defaults["role"] = UserRole(defaults["role"])
+    return Doc(**defaults)
 
 
-class DocumentChunk(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "document_chunks"
-
-    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    page_number: Mapped[Optional[int]] = mapped_column(Integer)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    vector_id: Mapped[Optional[str]] = mapped_column(String(100))
-    token_estimate: Mapped[int] = mapped_column(Integer, default=0)
-
-    document: Mapped["Document"] = relationship(back_populates="chunks")
-
-
-class Conversation(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "conversations"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(200), default="New conversation")
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-
-    messages: Mapped[list["Message"]] = relationship(
-        back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
+def make_profile(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        photo_url=None,
+        course=None,
+        branch=None,
+        semester=None,
+        academic_year=None,
+        preferred_study_time=None,
+        daily_study_hours=3.0,
+        learning_preferences=None,
+        academic_goals=None,
+        notification_prefs=None,
+        ai_prefs=None,
     )
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class Message(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "messages"
-
-    conversation_id: Mapped[str] = mapped_column(
-        ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+def make_subject(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        name="",
+        code=None,
+        description=None,
+        color="#2563eb",
+        priority=Priority.medium,
+        exam_date=None,
     )
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    role: Mapped[str] = mapped_column(String(20), nullable=False)  # user | assistant | system
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    sources_json: Mapped[Optional[str]] = mapped_column(Text)  # citation metadata
-    used_rag: Mapped[bool] = mapped_column(Boolean, default=False)
-    from_general_knowledge: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+    defaults.update(kwargs)
+    if isinstance(defaults.get("priority"), str):
+        defaults["priority"] = Priority(defaults["priority"])
+    return Doc(**defaults)
 
 
-class StudyPlan(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "study_plans"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(200), default="Adaptive Study Plan")
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-
-    sessions: Mapped[list["StudySession"]] = relationship(
-        back_populates="plan", cascade="all, delete-orphan"
+def make_unit(**kwargs: Any) -> Doc:
+    defaults = _base(
+        subject_id="",
+        user_id="",
+        name="",
+        order_index=0,
+        progress_override=None,
     )
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class StudySession(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "study_sessions"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    plan_id: Mapped[Optional[str]] = mapped_column(ForeignKey("study_plans.id", ondelete="SET NULL"))
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    scheduled_date: Mapped[date] = mapped_column(Date, nullable=False)
-    start_time: Mapped[Optional[time]] = mapped_column(Time)
-    end_time: Mapped[Optional[time]] = mapped_column(Time)
-    duration_minutes: Mapped[int] = mapped_column(Integer, default=30)
-    status: Mapped[SessionStatus] = mapped_column(Enum(SessionStatus), default=SessionStatus.planned)
-    activity_type: Mapped[str] = mapped_column(String(40), default="study")  # study|revision|quiz|flashcards
-    notes: Mapped[Optional[str]] = mapped_column(Text)
-
-    plan: Mapped[Optional["StudyPlan"]] = relationship(back_populates="sessions")
-
-
-class Quiz(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "quizzes"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    unit_id: Mapped[Optional[str]] = mapped_column(ForeignKey("units.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    difficulty: Mapped[Difficulty] = mapped_column(Enum(Difficulty), default=Difficulty.medium)
-    question_count: Mapped[int] = mapped_column(Integer, default=10)
-
-    questions: Mapped[list["QuizQuestion"]] = relationship(
-        back_populates="quiz", cascade="all, delete-orphan"
+def make_topic(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id="",
+        unit_id=None,
+        name="",
+        description=None,
+        difficulty=Difficulty.medium,
+        status=TopicStatus.not_started,
+        knowledge_level=0.0,
+        last_studied_at=None,
+        revision_count=0,
+        quiz_average=None,
+        importance=1.0,
     )
-    attempts: Mapped[list["QuizAttempt"]] = relationship(
-        back_populates="quiz", cascade="all, delete-orphan"
+    defaults.update(kwargs)
+    if isinstance(defaults.get("difficulty"), str):
+        defaults["difficulty"] = Difficulty(defaults["difficulty"])
+    if isinstance(defaults.get("status"), str):
+        defaults["status"] = TopicStatus(defaults["status"])
+    return Doc(**defaults)
+
+
+def make_document(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id=None,
+        unit_id=None,
+        topic_id=None,
+        title="",
+        original_filename="",
+        stored_filename="",
+        mime_type="",
+        file_size=0,
+        status=DocumentStatus.pending,
+        progress=0,
+        error_message=None,
+        page_count=None,
     )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("status"), str):
+        defaults["status"] = DocumentStatus(defaults["status"])
+    return Doc(**defaults)
 
 
-class QuizQuestion(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "quiz_questions"
-
-    quiz_id: Mapped[str] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"), index=True)
-    question_type: Mapped[QuestionType] = mapped_column(Enum(QuestionType), default=QuestionType.mcq)
-    prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    options_json: Mapped[Optional[str]] = mapped_column(Text)  # for MCQ
-    correct_answer: Mapped[str] = mapped_column(Text, nullable=False)
-    explanation: Mapped[Optional[str]] = mapped_column(Text)
-    topic_tag: Mapped[Optional[str]] = mapped_column(String(200))
-    order_index: Mapped[int] = mapped_column(Integer, default=0)
-
-    quiz: Mapped["Quiz"] = relationship(back_populates="questions")
-
-
-class QuizAttempt(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "quiz_attempts"
-
-    quiz_id: Mapped[str] = mapped_column(ForeignKey("quizzes.id", ondelete="CASCADE"), index=True)
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-    max_score: Mapped[float] = mapped_column(Float, default=0.0)
-    percentage: Mapped[float] = mapped_column(Float, default=0.0)
-    strong_topics_json: Mapped[Optional[str]] = mapped_column(Text)
-    weak_topics_json: Mapped[Optional[str]] = mapped_column(Text)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-    quiz: Mapped["Quiz"] = relationship(back_populates="attempts")
-    answers: Mapped[list["QuizAnswer"]] = relationship(
-        back_populates="attempt", cascade="all, delete-orphan"
+def make_chunk(**kwargs: Any) -> Doc:
+    defaults = _base(
+        document_id="",
+        user_id="",
+        chunk_index=0,
+        page_number=None,
+        content="",
+        vector_id=None,
+        token_estimate=0,
     )
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class QuizAnswer(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "quiz_answers"
-
-    attempt_id: Mapped[str] = mapped_column(ForeignKey("quiz_attempts.id", ondelete="CASCADE"), index=True)
-    question_id: Mapped[str] = mapped_column(ForeignKey("quiz_questions.id", ondelete="CASCADE"))
-    user_answer: Mapped[str] = mapped_column(Text, nullable=False)
-    is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    attempt: Mapped["QuizAttempt"] = relationship(back_populates="answers")
+def make_conversation(**kwargs: Any) -> Doc:
+    defaults = _base(user_id="", title="New conversation", subject_id=None)
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class Flashcard(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "flashcards"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    question: Mapped[str] = mapped_column(Text, nullable=False)
-    answer: Mapped[str] = mapped_column(Text, nullable=False)
-    difficulty: Mapped[Difficulty] = mapped_column(Enum(Difficulty), default=Difficulty.medium)
-    review_status: Mapped[str] = mapped_column(String(40), default="new")
-    ease_factor: Mapped[float] = mapped_column(Float, default=2.5)
-    interval_days: Mapped[int] = mapped_column(Integer, default=0)
-    repetitions: Mapped[int] = mapped_column(Integer, default=0)
-    next_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_reviewed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-
-
-class Exam(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "exams"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[str] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
-    name: Mapped[str] = mapped_column(String(200), nullable=False)
-    exam_date: Mapped[date] = mapped_column(Date, nullable=False)
-    exam_time: Mapped[Optional[time]] = mapped_column(Time)
-    syllabus: Mapped[Optional[str]] = mapped_column(Text)
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.high)
-
-
-class Assignment(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "assignments"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text)
-    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.medium)
-    status: Mapped[AssignmentStatus] = mapped_column(
-        Enum(AssignmentStatus), default=AssignmentStatus.pending
+def make_message(**kwargs: Any) -> Doc:
+    defaults = _base(
+        conversation_id="",
+        user_id="",
+        role="user",
+        content="",
+        sources_json=None,
+        used_rag=False,
+        from_general_knowledge=False,
     )
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class Notification(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "notifications"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    body: Mapped[str] = mapped_column(Text, nullable=False)
-    category: Mapped[str] = mapped_column(String(40), default="general")
-    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
-    link: Mapped[Optional[str]] = mapped_column(String(300))
-
-
-class Recommendation(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "recommendations"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    priority: Mapped[Priority] = mapped_column(Enum(Priority), default=Priority.medium)
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    reason: Mapped[str] = mapped_column(Text, nullable=False)
-    suggested_actions_json: Mapped[str] = mapped_column(Text, nullable=False)
-    score: Mapped[float] = mapped_column(Float, default=0.0)
-    is_dismissed: Mapped[bool] = mapped_column(Boolean, default=False)
+def make_study_plan(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        title="Adaptive Study Plan",
+        start_date=date.today(),
+        end_date=date.today(),
+        notes=None,
+        is_active=True,
+    )
+    defaults.update(kwargs)
+    return Doc(**defaults)
 
 
-class StudyActivity(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "study_activities"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    activity_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    minutes: Mapped[int] = mapped_column(Integer, default=0)
-    activity_type: Mapped[str] = mapped_column(String(40), default="study")
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-
-    __table_args__ = (UniqueConstraint("user_id", "activity_date", "activity_type", "topic_id"),)
-
-
-class PerformanceRecord(Base, UUIDPrimaryKey, TimestampMixin):
-    __tablename__ = "performance_records"
-
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    subject_id: Mapped[Optional[str]] = mapped_column(ForeignKey("subjects.id", ondelete="SET NULL"))
-    topic_id: Mapped[Optional[str]] = mapped_column(ForeignKey("topics.id", ondelete="SET NULL"))
-    metric: Mapped[str] = mapped_column(String(80), nullable=False)
-    value: Mapped[float] = mapped_column(Float, nullable=False)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+def make_study_session(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        plan_id=None,
+        subject_id=None,
+        topic_id=None,
+        title="",
+        scheduled_date=date.today(),
+        start_time=None,
+        end_time=None,
+        duration_minutes=30,
+        status=SessionStatus.planned,
+        activity_type="study",
+        notes=None,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("status"), str):
+        defaults["status"] = SessionStatus(defaults["status"])
+    return Doc(**defaults)
 
 
-class PasswordResetToken(Base, UUIDPrimaryKey, TimestampMixin):
-    """Architecture for forgot-password; email delivery can be wired later."""
+def make_quiz(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id=None,
+        unit_id=None,
+        topic_id=None,
+        title="",
+        difficulty=Difficulty.medium,
+        question_count=10,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("difficulty"), str):
+        defaults["difficulty"] = Difficulty(defaults["difficulty"])
+    return Doc(**defaults)
 
-    __tablename__ = "password_reset_tokens"
 
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    token_hash: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    used: Mapped[bool] = mapped_column(Boolean, default=False)
+def make_quiz_question(**kwargs: Any) -> Doc:
+    defaults = _base(
+        quiz_id="",
+        question_type=QuestionType.mcq,
+        prompt="",
+        options_json=None,
+        correct_answer="",
+        explanation=None,
+        topic_tag=None,
+        order_index=0,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("question_type"), str):
+        defaults["question_type"] = QuestionType(defaults["question_type"])
+    return Doc(**defaults)
+
+
+def make_quiz_attempt(**kwargs: Any) -> Doc:
+    defaults = _base(
+        quiz_id="",
+        user_id="",
+        score=0.0,
+        max_score=0.0,
+        percentage=0.0,
+        strong_topics_json=None,
+        weak_topics_json=None,
+        completed_at=None,
+    )
+    defaults.update(kwargs)
+    return Doc(**defaults)
+
+
+def make_quiz_answer(**kwargs: Any) -> Doc:
+    defaults = _base(
+        attempt_id="",
+        question_id="",
+        user_answer="",
+        is_correct=False,
+    )
+    defaults.update(kwargs)
+    return Doc(**defaults)
+
+
+def make_flashcard(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id=None,
+        topic_id=None,
+        question="",
+        answer="",
+        difficulty=Difficulty.medium,
+        review_status="new",
+        ease_factor=2.5,
+        interval_days=0,
+        repetitions=0,
+        next_review_at=None,
+        last_reviewed_at=None,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("difficulty"), str):
+        defaults["difficulty"] = Difficulty(defaults["difficulty"])
+    return Doc(**defaults)
+
+
+def make_exam(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id="",
+        name="",
+        exam_date=date.today(),
+        exam_time=None,
+        syllabus=None,
+        priority=Priority.high,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("priority"), str):
+        defaults["priority"] = Priority(defaults["priority"])
+    return Doc(**defaults)
+
+
+def make_assignment(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        subject_id=None,
+        title="",
+        description=None,
+        deadline=utcnow(),
+        priority=Priority.medium,
+        status=AssignmentStatus.pending,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("priority"), str):
+        defaults["priority"] = Priority(defaults["priority"])
+    if isinstance(defaults.get("status"), str):
+        defaults["status"] = AssignmentStatus(defaults["status"])
+    return Doc(**defaults)
+
+
+def make_recommendation(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        topic_id=None,
+        subject_id=None,
+        priority=Priority.medium,
+        title="",
+        reason="",
+        suggested_actions_json="[]",
+        score=0.0,
+        is_dismissed=False,
+    )
+    defaults.update(kwargs)
+    if isinstance(defaults.get("priority"), str):
+        defaults["priority"] = Priority(defaults["priority"])
+    return Doc(**defaults)
+
+
+def make_study_activity(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        activity_date=date.today(),
+        minutes=0,
+        activity_type="study",
+        subject_id=None,
+        topic_id=None,
+    )
+    defaults.update(kwargs)
+    return Doc(**defaults)
+
+
+def make_password_reset(**kwargs: Any) -> Doc:
+    defaults = _base(
+        user_id="",
+        token_hash="",
+        expires_at=utcnow(),
+        used=False,
+    )
+    defaults.update(kwargs)
+    return Doc(**defaults)
+
+
+# Aliases used across the codebase (look like former ORM classes)
+User = Doc
+StudentProfile = Doc
+Subject = Doc
+Unit = Doc
+Topic = Doc
+Document = Doc
+DocumentChunk = Doc
+Conversation = Doc
+Message = Doc
+StudyPlan = Doc
+StudySession = Doc
+Quiz = Doc
+QuizQuestion = Doc
+QuizAttempt = Doc
+QuizAnswer = Doc
+Flashcard = Doc
+Exam = Doc
+Assignment = Doc
+Recommendation = Doc
+StudyActivity = Doc
+PasswordResetToken = Doc
+PerformanceRecord = Doc
+
+__all__ = [
+    "Doc",
+    "from_mongo",
+    "touch",
+    "utcnow",
+    "new_uuid",
+    "UserRole",
+    "Difficulty",
+    "TopicStatus",
+    "DocumentStatus",
+    "AssignmentStatus",
+    "QuestionType",
+    "SessionStatus",
+    "Priority",
+    "make_user",
+    "make_profile",
+    "make_subject",
+    "make_unit",
+    "make_topic",
+    "make_document",
+    "make_chunk",
+    "make_conversation",
+    "make_message",
+    "make_study_plan",
+    "make_study_session",
+    "make_quiz",
+    "make_quiz_question",
+    "make_quiz_attempt",
+    "make_quiz_answer",
+    "make_flashcard",
+    "make_exam",
+    "make_assignment",
+    "make_recommendation",
+    "make_study_activity",
+    "make_password_reset",
+    "User",
+    "StudentProfile",
+    "Subject",
+    "Unit",
+    "Topic",
+    "Document",
+    "DocumentChunk",
+    "Conversation",
+    "Message",
+    "StudyPlan",
+    "StudySession",
+    "Quiz",
+    "QuizQuestion",
+    "QuizAttempt",
+    "QuizAnswer",
+    "Flashcard",
+    "Exam",
+    "Assignment",
+    "Recommendation",
+    "StudyActivity",
+    "PasswordResetToken",
+    "PerformanceRecord",
+]

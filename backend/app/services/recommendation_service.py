@@ -1,7 +1,4 @@
-"""Deterministic recommendation & readiness engine.
-
-Academic priority rules are code-based and testable. LLMs may only enrich wording.
-"""
+"""Deterministic recommendation & readiness engine (MongoDB)."""
 
 from __future__ import annotations
 
@@ -9,48 +6,27 @@ import json
 from datetime import date, datetime, timezone
 from typing import Any, Optional
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from pymongo.database import Database
 
-from app.models import (
-    Assignment,
-    AssignmentStatus,
-    Exam,
-    Flashcard,
-    Priority,
-    QuizAttempt,
-    Recommendation,
-    SessionStatus,
-    StudyActivity,
-    StudySession,
-    Topic,
-    User,
-)
+from app.models import AssignmentStatus, Priority, SessionStatus, make_recommendation
+from app.models.doc import Doc
+from app.repositories import mongo as repo
 
 
 def days_until(d: date) -> int:
     return (d - date.today()).days
 
 
-def compute_exam_readiness(db: Session, user: User, exam: Exam) -> dict[str, Any]:
-    topics = db.query(Topic).filter(Topic.user_id == user.id, Topic.subject_id == exam.subject_id).all()
+def compute_exam_readiness(db: Database, user: Doc, exam: Doc) -> dict[str, Any]:
+    topics = repo.find_many(db, "topics", {"user_id": user.id, "subject_id": exam.subject_id})
     syllabus = round(sum(t.knowledge_level for t in topics) / len(topics), 1) if topics else 0.0
 
-    attempts = (
-        db.query(QuizAttempt)
-        .join(QuizAttempt.quiz)
-        .filter(QuizAttempt.user_id == user.id)
-        .all()
-    )
-    # Filter by subject via quiz — load simply
-    from app.models import Quiz
+    quizzes = repo.find_many(db, "quizzes", {"user_id": user.id, "subject_id": exam.subject_id})
+    quiz_ids = [q.id for q in quizzes]
+    subject_attempts = []
+    for qid in quiz_ids:
+        subject_attempts.extend(repo.find_many(db, "quiz_attempts", {"user_id": user.id, "quiz_id": qid}))
 
-    subject_attempts = (
-        db.query(QuizAttempt)
-        .join(Quiz, QuizAttempt.quiz_id == Quiz.id)
-        .filter(QuizAttempt.user_id == user.id, Quiz.subject_id == exam.subject_id)
-        .all()
-    )
     quiz_perf = (
         round(sum(a.percentage for a in subject_attempts) / len(subject_attempts), 1)
         if subject_attempts
@@ -60,21 +36,13 @@ def compute_exam_readiness(db: Session, user: User, exam: Exam) -> dict[str, Any
     revisions = sum(t.revision_count for t in topics)
     revision_score = min(100.0, revisions * 8.0) if topics else 0.0
 
-    flash_count = (
-        db.query(func.count(Flashcard.id))
-        .filter(Flashcard.user_id == user.id, Flashcard.subject_id == exam.subject_id)
-        .scalar()
-        or 0
-    )
+    flash_count = repo.count(db, "flashcards", {"user_id": user.id, "subject_id": exam.subject_id})
     practice = min(100.0, flash_count * 5.0 + quiz_perf * 0.3)
-
     proximity = days_until(exam.exam_date)
-    # Soft weight — readiness is preparation quality, not time remaining
     overall = round(
         syllabus * 0.35 + quiz_perf * 0.30 + revision_score * 0.20 + practice * 0.15,
         1,
     )
-
     return {
         "overall": overall,
         "syllabus_coverage": syllabus,
@@ -91,16 +59,12 @@ def compute_exam_readiness(db: Session, user: User, exam: Exam) -> dict[str, Any
 
 
 class RecommendationEngine:
-    def __init__(self, db: Session):
+    def __init__(self, db: Database):
         self.db = db
 
-    def weak_topics(self, user: User, limit: int = 8) -> list[dict[str, Any]]:
-        topics = (
-            self.db.query(Topic)
-            .filter(Topic.user_id == user.id)
-            .order_by(Topic.knowledge_level.asc())
-            .limit(limit)
-            .all()
+    def weak_topics(self, user: Doc, limit: int = 8) -> list[dict[str, Any]]:
+        topics = repo.find_many(
+            self.db, "topics", {"user_id": user.id}, sort=[("knowledge_level", 1)], limit=limit
         )
         result = []
         for t in topics:
@@ -118,20 +82,15 @@ class RecommendationEngine:
             )
         return result
 
-    def generate(self, user: User) -> list[Recommendation]:
-        """Rebuild active recommendations from deterministic rules."""
-        # Soft-delete old by dismissing previous open ones
-        old = (
-            self.db.query(Recommendation)
-            .filter(Recommendation.user_id == user.id, Recommendation.is_dismissed.is_(False))
-            .all()
-        )
+    def generate(self, user: Doc) -> list[Doc]:
+        old = repo.find_many(self.db, "recommendations", {"user_id": user.id, "is_dismissed": False})
         for r in old:
             r.is_dismissed = True
+            repo.save(self.db, "recommendations", r)
 
         candidates: list[tuple[float, dict[str, Any]]] = []
-        topics = self.db.query(Topic).filter(Topic.user_id == user.id).all()
-        exams = self.db.query(Exam).filter(Exam.user_id == user.id).all()
+        topics = repo.find_many(self.db, "topics", {"user_id": user.id})
+        exams = repo.find_many(self.db, "exams", {"user_id": user.id})
         exam_by_subject = {e.subject_id: e for e in exams}
 
         for topic in topics:
@@ -154,7 +113,7 @@ class RecommendationEngine:
 
             if topic.last_studied_at:
                 last = topic.last_studied_at
-                if last.tzinfo is None:
+                if getattr(last, "tzinfo", None) is None:
                     last = last.replace(tzinfo=timezone.utc)
                 lag = (datetime.now(timezone.utc) - last).days
                 if lag >= 4:
@@ -165,7 +124,6 @@ class RecommendationEngine:
                 reasons.append("Never studied yet")
 
             score *= topic.importance
-
             if score < 25:
                 continue
 
@@ -194,17 +152,27 @@ class RecommendationEngine:
                 )
             )
 
-        # Assignment urgency
-        assignments = (
-            self.db.query(Assignment)
-            .filter(
-                Assignment.user_id == user.id,
-                Assignment.status.in_([AssignmentStatus.pending, AssignmentStatus.in_progress]),
-            )
-            .all()
+        subjects_with_topics = {t.subject_id for t in topics}
+        for subject in repo.find_many(self.db, "subjects", {"user_id": user.id}):
+            if subject.id in subjects_with_topics:
+                continue
+            candidate = self._subject_candidate(user, subject, exam_by_subject.get(subject.id))
+            if candidate:
+                candidates.append(candidate)
+
+        assignments = repo.find_many(
+            self.db,
+            "assignments",
+            {
+                "user_id": user.id,
+                "status": {"$in": [AssignmentStatus.pending.value, AssignmentStatus.in_progress.value]},
+            },
         )
         for a in assignments:
-            rem = (a.deadline.date() - date.today()).days
+            deadline = a.deadline
+            if isinstance(deadline, str):
+                deadline = datetime.fromisoformat(deadline)
+            rem = (deadline.date() - date.today()).days if hasattr(deadline, "date") else 0
             if rem <= 3:
                 candidates.append(
                     (
@@ -224,95 +192,163 @@ class RecommendationEngine:
                 )
 
         candidates.sort(key=lambda x: x[0], reverse=True)
-        created: list[Recommendation] = []
-        for score, payload in candidates[:8]:
-            rec = Recommendation(user_id=user.id, **payload)
-            self.db.add(rec)
+        created: list[Doc] = []
+        for _, payload in candidates[:8]:
+            rec = make_recommendation(user_id=user.id, **payload)
+            repo.insert(self.db, "recommendations", rec)
             created.append(rec)
-
-        self.db.commit()
-        for r in created:
-            self.db.refresh(r)
         return created
 
-    def top_recommendation(self, user: User) -> Optional[Recommendation]:
-        rec = (
-            self.db.query(Recommendation)
-            .filter(Recommendation.user_id == user.id, Recommendation.is_dismissed.is_(False))
-            .order_by(Recommendation.score.desc())
-            .first()
+    def _subject_candidate(
+        self, user: Doc, subject: Doc, exam: Optional[Doc]
+    ) -> Optional[tuple[float, dict[str, Any]]]:
+        """Score a subject that has no topic breakdown, using its quizzes, exam and activity."""
+        score = 0.0
+        reasons: list[str] = []
+
+        quiz_ids = [
+            q.id for q in repo.find_many(self.db, "quizzes", {"user_id": user.id, "subject_id": subject.id})
+        ]
+        attempts = (
+            repo.find_many(self.db, "quiz_attempts", {"user_id": user.id, "quiz_id": {"$in": quiz_ids}})
+            if quiz_ids
+            else []
         )
-        if not rec:
-            generated = self.generate(user)
-            return generated[0] if generated else None
-        return rec
+        quiz_avg = round(sum(a.percentage for a in attempts) / len(attempts), 1) if attempts else None
+        if quiz_avg is None:
+            score += 40
+            reasons.append("No quizzes taken yet")
+        elif quiz_avg < 60:
+            score += (60 - quiz_avg) * 1.5
+            reasons.append(f"Quiz average: {quiz_avg:.0f}%")
+
+        if exam:
+            days = days_until(exam.exam_date)
+            if days <= 7:
+                score += max(0, (8 - days) * 12)
+                reasons.append(f"Exam in {days} day(s)")
+
+        activities = repo.find_many(
+            self.db,
+            "study_activities",
+            {"user_id": user.id, "subject_id": subject.id},
+            sort=[("activity_date", -1)],
+            limit=1,
+        )
+        if activities:
+            last = activities[0].activity_date
+            if isinstance(last, datetime):
+                last = last.date()
+            elif isinstance(last, str):
+                last = date.fromisoformat(last[:10])
+            lag = (date.today() - last).days
+            if lag >= 4:
+                score += min(30, lag * 4)
+                reasons.append(f"Last studied: {lag} days ago")
+        else:
+            score += 15
+            reasons.append("Never studied yet")
+
+        if score < 25:
+            return None
+
+        actions = [
+            {"minutes": 20, "action": "quiz", "label": f"Practice quiz on {subject.name}"},
+            {"minutes": 15, "action": "flashcards", "label": "Flashcard review"},
+            {"minutes": 5, "action": "topics", "label": f"Add topics to {subject.name} for sharper advice"},
+        ]
+        priority = Priority.high if score >= 80 else Priority.medium if score >= 50 else Priority.low
+        return (
+            score,
+            {
+                "topic_id": None,
+                "subject_id": subject.id,
+                "priority": priority,
+                "title": f"Practise {subject.name}",
+                "reason": ". ".join(reasons),
+                "suggested_actions_json": json.dumps(actions),
+                "score": round(score, 1),
+            },
+        )
+
+    def top_recommendation(self, user: Doc) -> Optional[Doc]:
+        recs = repo.find_many(
+            self.db,
+            "recommendations",
+            {"user_id": user.id, "is_dismissed": False},
+            sort=[("score", -1)],
+            limit=1,
+        )
+        if recs:
+            return recs[0]
+        generated = self.generate(user)
+        return generated[0] if generated else None
 
 
 class AnalyticsService:
-    def __init__(self, db: Session):
+    def __init__(self, db: Database):
         self.db = db
 
-    def study_streak(self, user: User) -> dict[str, Any]:
-        days = (
-            self.db.query(StudyActivity.activity_date)
-            .filter(StudyActivity.user_id == user.id, StudyActivity.minutes > 0)
-            .distinct()
-            .order_by(StudyActivity.activity_date.desc())
-            .all()
+    def study_streak(self, user: Doc) -> dict[str, Any]:
+        activities = repo.find_many(
+            self.db,
+            "study_activities",
+            {"user_id": user.id, "minutes": {"$gt": 0}},
+            sort=[("activity_date", -1)],
         )
-        dates = [d[0] for d in days]
+        dates = sorted({a.activity_date for a in activities}, reverse=True)
         streak = 0
         cursor = date.today()
         date_set = set(dates)
-        # Allow yesterday start if no activity today yet
-        if cursor not in date_set and (cursor.toordinal() - 1) in {d.toordinal() for d in date_set}:
+        if cursor not in date_set and date.fromordinal(cursor.toordinal() - 1) in date_set:
             cursor = date.fromordinal(cursor.toordinal() - 1)
         while cursor in date_set:
             streak += 1
             cursor = date.fromordinal(cursor.toordinal() - 1)
 
         week_start = date.fromordinal(date.today().toordinal() - date.today().weekday())
-        sessions_done = (
-            self.db.query(func.count(StudySession.id))
-            .filter(
-                StudySession.user_id == user.id,
-                StudySession.status == SessionStatus.completed,
-                StudySession.scheduled_date >= week_start,
-            )
-            .scalar()
-            or 0
+        sessions = repo.find_many(
+            self.db,
+            "study_sessions",
+            {
+                "user_id": user.id,
+                "status": SessionStatus.completed.value,
+                "scheduled_date": {"$gte": week_start.isoformat()},
+            },
         )
+        # also match date objects if stored that way
+        sessions_done = len(sessions)
+        if sessions_done == 0:
+            all_completed = repo.find_many(
+                self.db,
+                "study_sessions",
+                {"user_id": user.id, "status": SessionStatus.completed.value},
+            )
+            sessions_done = sum(1 for s in all_completed if s.scheduled_date >= week_start)
+
         return {
             "streak_days": streak,
             "weekly_sessions_done": sessions_done,
             "weekly_goal": 10,
         }
 
-    def dashboard_stats(self, user: User) -> dict[str, Any]:
-        topics = self.db.query(Topic).filter(Topic.user_id == user.id).all()
+    def dashboard_stats(self, user: Doc) -> dict[str, Any]:
+        topics = repo.find_many(self.db, "topics", {"user_id": user.id})
         overall = round(sum(t.knowledge_level for t in topics) / len(topics), 1) if topics else 0.0
-        hours = (
-            self.db.query(func.coalesce(func.sum(StudyActivity.minutes), 0))
-            .filter(StudyActivity.user_id == user.id)
-            .scalar()
-            or 0
-        ) / 60.0
-        attempts = self.db.query(QuizAttempt).filter(QuizAttempt.user_id == user.id).all()
+        activities = repo.find_many(self.db, "study_activities", {"user_id": user.id})
+        hours = sum(a.minutes for a in activities) / 60.0
+        attempts = repo.find_many(self.db, "quiz_attempts", {"user_id": user.id})
         quiz_avg = (
             round(sum(a.percentage for a in attempts) / len(attempts), 1) if attempts else 0.0
         )
-        tasks = (
-            self.db.query(func.count(Assignment.id))
-            .filter(Assignment.user_id == user.id, Assignment.status == AssignmentStatus.completed)
-            .scalar()
-            or 0
+        tasks = repo.count(
+            self.db, "assignments", {"user_id": user.id, "status": AssignmentStatus.completed.value}
         )
-        exams = self.db.query(Exam).filter(Exam.user_id == user.id).all()
-        readiness_vals = []
-        for e in exams:
-            readiness_vals.append(compute_exam_readiness(self.db, user, e)["overall"])
-        exam_readiness = round(sum(readiness_vals) / len(readiness_vals), 1) if readiness_vals else overall
-
+        exams = repo.find_many(self.db, "exams", {"user_id": user.id})
+        readiness_vals = [compute_exam_readiness(self.db, user, e)["overall"] for e in exams]
+        exam_readiness = (
+            round(sum(readiness_vals) / len(readiness_vals), 1) if readiness_vals else overall
+        )
         return {
             "overall_progress": overall,
             "study_hours": round(hours, 1),
@@ -321,11 +357,9 @@ class AnalyticsService:
             "exam_readiness": exam_readiness,
         }
 
-    def full_analytics(self, user: User) -> dict[str, Any]:
-        from app.models import Subject
-
-        topics = self.db.query(Topic).filter(Topic.user_id == user.id).all()
-        subjects = self.db.query(Subject).filter(Subject.user_id == user.id).all()
+    def full_analytics(self, user: Doc) -> dict[str, Any]:
+        topics = repo.find_many(self.db, "topics", {"user_id": user.id})
+        subjects = repo.find_many(self.db, "subjects", {"user_id": user.id})
         subject_perf = []
         for s in subjects:
             st = [t for t in topics if t.subject_id == s.id]
@@ -337,39 +371,35 @@ class AnalyticsService:
                 }
             )
         topic_perf = [
-            {"id": t.id, "name": t.name, "subject_id": t.subject_id, "knowledge_level": t.knowledge_level}
+            {
+                "id": t.id,
+                "name": t.name,
+                "subject_id": t.subject_id,
+                "knowledge_level": t.knowledge_level,
+            }
             for t in sorted(topics, key=lambda x: x.knowledge_level)
         ]
         stats = self.dashboard_stats(user)
         completed = len([t for t in topics if t.knowledge_level >= 80])
         remaining = len(topics) - completed
 
-        # Weekly progress last 7 days
+        activities = repo.find_many(self.db, "study_activities", {"user_id": user.id})
+        by_day = {}
+        for a in activities:
+            key = a.activity_date.isoformat() if hasattr(a.activity_date, "isoformat") else str(a.activity_date)
+            by_day[key] = by_day.get(key, 0) + a.minutes
+
         weekly = []
         for i in range(6, -1, -1):
             d = date.fromordinal(date.today().toordinal() - i)
-            mins = (
-                self.db.query(func.coalesce(func.sum(StudyActivity.minutes), 0))
-                .filter(StudyActivity.user_id == user.id, StudyActivity.activity_date == d)
-                .scalar()
-                or 0
-            )
-            weekly.append({"date": d.isoformat(), "minutes": mins})
-
+            weekly.append({"date": d.isoformat(), "minutes": by_day.get(d.isoformat(), 0)})
         monthly = []
         for i in range(29, -1, -1):
             d = date.fromordinal(date.today().toordinal() - i)
-            mins = (
-                self.db.query(func.coalesce(func.sum(StudyActivity.minutes), 0))
-                .filter(StudyActivity.user_id == user.id, StudyActivity.activity_date == d)
-                .scalar()
-                or 0
-            )
-            monthly.append({"date": d.isoformat(), "minutes": mins})
+            monthly.append({"date": d.isoformat(), "minutes": by_day.get(d.isoformat(), 0)})
 
         revisions = sum(t.revision_count for t in topics)
         active_days = len({w["date"] for w in weekly if w["minutes"] > 0})
-
         return {
             "overall_progress": stats["overall_progress"],
             "subject_performance": subject_perf,
@@ -385,29 +415,16 @@ class AnalyticsService:
             "study_consistency": round(active_days / 7 * 100, 1),
         }
 
-    def knowledge_map(self, user: User) -> dict[str, Any]:
-        from app.models import Subject, Unit
-
-        subjects = (
-            self.db.query(Subject)
-            .filter(Subject.user_id == user.id)
-            .all()
-        )
+    def knowledge_map(self, user: Doc) -> dict[str, Any]:
+        subjects = repo.find_many(self.db, "subjects", {"user_id": user.id})
         tree = []
         for s in subjects:
-            units = (
-                self.db.query(Unit)
-                .filter(Unit.subject_id == s.id, Unit.user_id == user.id)
-                .order_by(Unit.order_index)
-                .all()
+            units = repo.find_many(
+                self.db, "units", {"subject_id": s.id, "user_id": user.id}, sort=[("order_index", 1)]
             )
             unit_nodes = []
             for u in units:
-                topics = (
-                    self.db.query(Topic)
-                    .filter(Topic.unit_id == u.id, Topic.user_id == user.id)
-                    .all()
-                )
+                topics = repo.find_many(self.db, "topics", {"unit_id": u.id, "user_id": user.id})
                 unit_nodes.append(
                     {
                         "id": u.id,
@@ -429,10 +446,10 @@ class AnalyticsService:
                         ],
                     }
                 )
-            orphan = (
-                self.db.query(Topic)
-                .filter(Topic.subject_id == s.id, Topic.unit_id.is_(None), Topic.user_id == user.id)
-                .all()
+            orphan = repo.find_many(
+                self.db,
+                "topics",
+                {"subject_id": s.id, "user_id": user.id, "unit_id": None},
             )
             tree.append(
                 {

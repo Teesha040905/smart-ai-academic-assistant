@@ -1,7 +1,8 @@
+import re
 from datetime import date, datetime, time
-from typing import Any, Generic, List, Optional, TypeVar
+from typing import Annotated, Any, Generic, List, Optional, TypeVar
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
 
 from app.models import (
     AssignmentStatus,
@@ -15,6 +16,10 @@ from app.models import (
 )
 
 T = TypeVar("T")
+
+# Trimmed, non-blank display name (units, topics, exams, assignments)
+NameStr = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+HexColor = Annotated[str, StringConstraints(pattern=r"^#(?:[0-9a-fA-F]{3}){1,2}$")]
 
 
 class ORMModel(BaseModel):
@@ -101,51 +106,79 @@ class UserUpdate(BaseModel):
 
 
 # ── Subjects / Units / Topics ──────────────────────────
+_SUBJECT_NAME_CHARS = re.compile(r"^[A-Za-z0-9 &()+#.,'/:-]+$")
+
+
+def validate_subject_name(value: str) -> str:
+    """Reject names that can't be a real subject: bare numbers, symbols, or repeated characters."""
+    name = " ".join(value.split())
+    has_letter = any(c.isalpha() for c in name)
+    if len(name) < 2 or len(name) > 100:
+        raise ValueError("Subject name must be between 2 and 100 characters")
+    if not _SUBJECT_NAME_CHARS.match(name):
+        raise ValueError("Subject name contains invalid characters")
+    if not has_letter:
+        raise ValueError("Subject name must contain letters, not just numbers or symbols")
+    if len(set(name.lower().replace(" ", ""))) == 1:
+        raise ValueError("Please enter a valid subject name")
+    return name
+
+
 class SubjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     code: Optional[str] = None
     description: Optional[str] = None
-    color: str = "#2563eb"
+    color: HexColor = "#2563eb"
     priority: Priority = Priority.medium
     exam_date: Optional[date] = None
+
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: str) -> str:
+        return validate_subject_name(value)
 
 
 class SubjectUpdate(BaseModel):
     name: Optional[str] = None
     code: Optional[str] = None
     description: Optional[str] = None
-    color: Optional[str] = None
+    color: Optional[HexColor] = None
     priority: Optional[Priority] = None
     exam_date: Optional[date] = None
 
+    @field_validator("name")
+    @classmethod
+    def _check_name(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else validate_subject_name(value)
+
 
 class UnitCreate(BaseModel):
-    name: str
+    name: NameStr
     order_index: int = 0
 
 
 class UnitUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[NameStr] = None
     order_index: Optional[int] = None
-    progress_override: Optional[float] = None
+    progress_override: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class TopicCreate(BaseModel):
-    name: str
+    name: NameStr
     description: Optional[str] = None
     unit_id: Optional[str] = None
     difficulty: Difficulty = Difficulty.medium
-    importance: float = 1.0
+    importance: float = Field(default=1.0, gt=0, le=10)
 
 
 class TopicUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[NameStr] = None
     description: Optional[str] = None
     unit_id: Optional[str] = None
     difficulty: Optional[Difficulty] = None
     status: Optional[TopicStatus] = None
     knowledge_level: Optional[float] = Field(default=None, ge=0, le=100)
-    importance: Optional[float] = None
+    importance: Optional[float] = Field(default=None, gt=0, le=10)
 
 
 class TopicOut(ORMModel):
@@ -316,6 +349,14 @@ class QuizOut(ORMModel):
     questions: List[QuizQuestionOut] = []
 
 
+class QuizAnswerReview(BaseModel):
+    question_id: str
+    user_answer: str
+    correct_answer: str
+    is_correct: bool
+    explanation: Optional[str] = None
+
+
 class QuizAttemptOut(ORMModel):
     id: str
     quiz_id: str
@@ -325,6 +366,7 @@ class QuizAttemptOut(ORMModel):
     strong_topics_json: Optional[str] = None
     weak_topics_json: Optional[str] = None
     completed_at: Optional[datetime] = None
+    review: List[QuizAnswerReview] = []
 
 
 # ── Flashcards ─────────────────────────────────────────
@@ -354,7 +396,7 @@ class FlashcardOut(ORMModel):
 # ── Exams / Assignments ────────────────────────────────
 class ExamCreate(BaseModel):
     subject_id: str
-    name: str
+    name: NameStr
     exam_date: date
     exam_time: Optional[time] = None
     syllabus: Optional[str] = None
@@ -362,7 +404,7 @@ class ExamCreate(BaseModel):
 
 
 class ExamUpdate(BaseModel):
-    name: Optional[str] = None
+    name: Optional[NameStr] = None
     exam_date: Optional[date] = None
     exam_time: Optional[time] = None
     syllabus: Optional[str] = None
@@ -382,7 +424,7 @@ class ExamOut(ORMModel):
 
 
 class AssignmentCreate(BaseModel):
-    title: str
+    title: NameStr
     subject_id: Optional[str] = None
     description: Optional[str] = None
     deadline: datetime
@@ -390,7 +432,7 @@ class AssignmentCreate(BaseModel):
 
 
 class AssignmentUpdate(BaseModel):
-    title: Optional[str] = None
+    title: Optional[NameStr] = None
     description: Optional[str] = None
     deadline: Optional[datetime] = None
     priority: Optional[Priority] = None
@@ -408,17 +450,7 @@ class AssignmentOut(ORMModel):
     status: AssignmentStatus
 
 
-# ── Notifications / Recommendations / Analytics ────────
-class NotificationOut(ORMModel):
-    id: str
-    title: str
-    body: str
-    category: str
-    is_read: bool
-    link: Optional[str] = None
-    created_at: datetime
-
-
+# ── Recommendations / Analytics ──────────────────────
 class RecommendationOut(ORMModel):
     id: str
     topic_id: Optional[str] = None

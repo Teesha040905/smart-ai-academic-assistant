@@ -17,10 +17,8 @@ export const mainNav: NavItem[] = [
   { href: "/performance", label: "Performance", icon: "chart" },
   { href: "/knowledge-map", label: "Knowledge Map", icon: "map" },
   { href: "/recommendations", label: "Recommendations", icon: "spark" },
-  { href: "/notifications", label: "Notifications", icon: "bell" },
   { href: "/search", label: "Search", icon: "search", mobile: true },
   { href: "/profile", label: "Profile", icon: "user" },
-  { href: "/settings", label: "Settings", icon: "gear" },
 ];
 
 export const mobileNav = mainNav.filter((item) => item.mobile);

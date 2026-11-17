@@ -9,6 +9,7 @@ import { formatDate, statLabel } from "@/lib/utils";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardHeader } from "@/components/ui/Card";
+import { DashboardChart } from "@/components/dashboard/DashboardChart";
 import {
   EmptyState,
   ErrorState,
@@ -20,165 +21,128 @@ export default function DashboardPage() {
   const loader = useCallback(() => api.get<Dashboard>("/dashboard"), []);
   const { data, loading, error, reload } = useAsyncData(loader, []);
 
-  if (loading) return <LoadingState label="Loading dashboard…" />;
+  if (loading) return <LoadingState label="Loading dashboard..." />;
   if (error) return <ErrorState message={error} onRetry={reload} />;
   if (!data) return <EmptyState title="No dashboard data" />;
 
   const stats = Object.entries(data.stats || {});
+  const streak = Number(data.streak?.streak_days ?? 0);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title={`${data.greeting}, ${data.student_name}`}
-        description="Your study overview for today."
+        title={`${data.greeting}, ${data.student_name} 👋`}
+        description="Here is your study overview for today."
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      {/* STATS & STREAK */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <Card className="sm:col-span-2 xl:col-span-1 bg-gradient-to-br from-orange-400 to-red-500 text-white border-none shadow-lg">
+          <CardBody className="flex items-center justify-between h-full p-4">
+            <div>
+              <p className="text-sm font-medium opacity-90">Day Streak</p>
+              <p className="font-serif text-3xl font-bold mt-0.5">{streak}</p>
+            </div>
+            <span className="text-4xl drop-shadow-md">🔥</span>
+          </CardBody>
+        </Card>
+        
         {stats.slice(0, 4).map(([key, value]) => (
           <Card key={key}>
-            <CardBody>
+            <CardBody className="flex flex-col justify-center h-full p-4">
               <p className="text-xs uppercase tracking-wide text-muted">
                 {statLabel(key)}
               </p>
-              <p className="mt-2 font-serif text-2xl font-semibold">
+              <p className="mt-0.5 font-serif text-2xl font-semibold">
                 {String(value)}
               </p>
             </CardBody>
           </Card>
         ))}
-        {stats.length === 0 && (
-          <Card className="sm:col-span-2 xl:col-span-4">
-            <CardBody>
-              <p className="text-sm text-muted">Stats will appear as you study.</p>
-            </CardBody>
-          </Card>
-        )}
       </div>
 
       <div className="grid gap-4 xl:grid-cols-3">
+        {/* CHART & WEAK TOPICS PROGRESS */}
         <Card className="xl:col-span-2">
-          <CardHeader title="Today's plan" description="Scheduled study sessions" />
-          <CardBody className="space-y-3">
-            {data.today_plan.length === 0 ? (
-              <EmptyState
-                title="No sessions today"
-                description="Generate a study plan to schedule focused blocks."
-                action={
-                  <Link href="/planner">
-                    <Button size="sm">Open planner</Button>
-                  </Link>
-                }
-              />
+          <CardHeader title="Knowledge Progress" description="Your weakest topics needing review" />
+          <CardBody>
+            {data.weak_topics && data.weak_topics.length > 0 ? (
+              <>
+                <div className="space-y-4 mb-6">
+                  {data.weak_topics.slice(0, 3).map((topic) => (
+                    <div key={String(topic.id)} className="space-y-1">
+                      <div className="flex justify-between text-sm">
+                        <span className="font-medium">{String(topic.name)}</span>
+                        <span className="font-semibold">{Number(topic.knowledge_level)}%</span>
+                      </div>
+                      <div className="h-2.5 w-full bg-slate-100 rounded-full overflow-hidden dark:bg-slate-800">
+                        <div 
+                          className={`h-full rounded-full ${Number(topic.knowledge_level) < 50 ? 'bg-red-500' : Number(topic.knowledge_level) < 75 ? 'bg-amber-500' : 'bg-emerald-500'}`} 
+                          style={{ width: `${Math.max(5, Number(topic.knowledge_level))}%` }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300 border-t pt-4">Knowledge Chart</h4>
+                <DashboardChart data={data.weak_topics} />
+              </>
             ) : (
-              data.today_plan.map((session) => (
-                <div
-                  key={session.id}
-                  className="flex items-center justify-between rounded-lg border border-slate-200/80 px-3 py-2 dark:border-slate-800"
-                >
-                  <div>
-                    <p className="font-medium">{session.title}</p>
-                    <p className="text-xs text-muted">
-                      {session.duration_minutes} min · {session.activity_type}
-                    </p>
+              <EmptyState title="No data yet" description="Start taking quizzes to see your knowledge progress." />
+            )}
+          </CardBody>
+        </Card>
+
+        {/* RECOMMENDATIONS & EXAMS */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader title="AI Recommendation" />
+            <CardBody>
+              {!data.recommendation ? (
+                <EmptyState
+                  title="No recommendation"
+                  description="Complete quizzes to get personalized tips."
+                />
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-medium">{data.recommendation.title}</p>
+                    <Badge tone="teal">{data.recommendation.priority}</Badge>
                   </div>
-                  <Badge tone={session.status === "completed" ? "green" : "teal"}>
-                    {session.status.replace("_", " ")}
-                  </Badge>
+                  <p className="text-sm text-muted">{data.recommendation.reason}</p>
+                  <Link href="/planner">
+                    <Button size="sm" className="w-full mt-2">Open Planner</Button>
+                  </Link>
                 </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
+              )}
+            </CardBody>
+          </Card>
 
-        <Card>
-          <CardHeader title="Study streak" />
-          <CardBody>
-            <p className="font-serif text-3xl font-semibold">
-              {String(data.streak?.current ?? data.streak?.days ?? "—")}
-            </p>
-            <p className="mt-1 text-sm text-muted">Consecutive study days</p>
-          </CardBody>
-        </Card>
+          <Card>
+            <CardHeader title="Upcoming exams" />
+            <CardBody className="space-y-3">
+              {data.upcoming_exams.length === 0 ? (
+                <EmptyState title="No exams scheduled" />
+              ) : (
+                data.upcoming_exams.map((exam) => (
+                  <div
+                    key={exam.id}
+                    className="flex flex-col gap-1 rounded-lg border border-slate-200/80 px-3 py-2 dark:border-slate-800"
+                  >
+                    <div className="flex justify-between">
+                      <p className="font-medium text-sm">{exam.name}</p>
+                      {exam.days_remaining != null && (
+                        <Badge tone="amber">{exam.days_remaining}d</Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted">{formatDate(exam.exam_date)}</p>
+                  </div>
+                ))
+              )}
+            </CardBody>
+          </Card>
+        </div>
       </div>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Weak topics" />
-          <CardBody className="space-y-2">
-            {data.weak_topics.length === 0 ? (
-              <p className="text-sm text-muted">No weak topics flagged yet.</p>
-            ) : (
-              data.weak_topics.slice(0, 6).map((topic, i) => (
-                <div
-                  key={String(topic.id ?? i)}
-                  className="flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900/60"
-                >
-                  <span className="text-sm font-medium">
-                    {String(topic.name ?? topic.title ?? "Topic")}
-                  </span>
-                  {"knowledge_level" in topic && (
-                    <Badge tone="amber">{String(topic.knowledge_level)}%</Badge>
-                  )}
-                </div>
-              ))
-            )}
-          </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader
-            title="AI recommendation"
-            action={
-              <Link href="/recommendations">
-                <Button variant="ghost" size="sm">
-                  View all
-                </Button>
-              </Link>
-            }
-          />
-          <CardBody>
-            {!data.recommendation ? (
-              <EmptyState
-                title="No recommendation yet"
-                description="Complete quizzes or upload materials to get personalized tips."
-              />
-            ) : (
-              <div className="space-y-2">
-                <p className="font-medium">{data.recommendation.title}</p>
-                <p className="text-sm text-muted">{data.recommendation.reason}</p>
-                <Badge tone="teal">{data.recommendation.priority} priority</Badge>
-              </div>
-            )}
-          </CardBody>
-        </Card>
-      </div>
-
-      <Card>
-        <CardHeader title="Upcoming exams" />
-        <CardBody className="space-y-3">
-          {data.upcoming_exams.length === 0 ? (
-            <EmptyState title="No exams scheduled" description="Add exams from subjects or planner." />
-          ) : (
-            data.upcoming_exams.map((exam) => (
-              <div
-                key={exam.id}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200/80 px-3 py-2 dark:border-slate-800"
-              >
-                <div>
-                  <p className="font-medium">{exam.name}</p>
-                  <p className="text-xs text-muted">{formatDate(exam.exam_date)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {exam.days_remaining != null && (
-                    <Badge tone="amber">{exam.days_remaining} days</Badge>
-                  )}
-                  <Badge>{exam.priority}</Badge>
-                </div>
-              </div>
-            ))
-          )}
-        </CardBody>
-      </Card>
     </div>
   );
 }

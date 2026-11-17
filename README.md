@@ -7,8 +7,8 @@ Production-oriented full-stack academic assistant with RAG tutoring, adaptive st
 | Layer | Technology |
 |-------|------------|
 | Frontend | Next.js 14 (App Router), TypeScript, Tailwind CSS |
-| Backend | FastAPI, SQLAlchemy 2, Alembic, Pydantic v2 |
-| Database | PostgreSQL 16 |
+| Backend | FastAPI, PyMongo, Pydantic v2 |
+| Database | MongoDB 7 |
 | Vector store | ChromaDB (user-isolated metadata filtering) |
 | Auth | JWT access tokens + bcrypt password hashing |
 | AI | OpenAI-compatible API (`AI_API_KEY`, `AI_BASE_URL`) |
@@ -45,7 +45,6 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
 cp ../.env.example ../.env
-alembic upgrade head
 python -m app.scripts.seed
 uvicorn app.main:app --reload --port 8000
 
