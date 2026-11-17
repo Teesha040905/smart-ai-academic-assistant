@@ -379,6 +379,15 @@ def test_document_lifecycle_with_gridfs_and_mongo_vectors(client, monkeypatch):
     assert db["uploads.files"].count_documents({}) == 0
     assert db.vector_chunks.count_documents({"document_id": doc_id}) == 0
 
+    # deleting the account removes files and vectors of documents it still owns
+    r = client.post("/api/v1/documents", files={"file": ("more.txt", body, "text/plain")}, headers=h)
+    assert r.status_code in (200, 201), r.text
+    assert db["uploads.files"].count_documents({}) == 1
+    assert client.delete("/api/v1/users/me", headers=h).status_code in (200, 204)
+    assert db["uploads.files"].count_documents({}) == 0
+    assert db["uploads.chunks"].count_documents({}) == 0
+    assert db.vector_chunks.count_documents({}) == 0
+
 
 def test_production_requires_strong_jwt_secret(monkeypatch):
     monkeypatch.setenv("ENVIRONMENT", "production")

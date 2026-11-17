@@ -5,6 +5,7 @@ from typing import Optional
 
 from pymongo.database import Database
 
+from app.core import file_storage
 from app.core.errors import AppError
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models import UserRole, make_password_reset, make_profile, make_user
@@ -106,6 +107,9 @@ class AuthService:
             repo.delete_many(self.db, "quiz_questions", {"quiz_id": {"$in": quiz_ids}})
         if attempt_ids:
             repo.delete_many(self.db, "quiz_answers", {"attempt_id": {"$in": attempt_ids}})
+        # uploaded files live outside the collections (disk or GridFS)
+        for doc in repo.find_many(self.db, "documents", {"user_id": uid}):
+            file_storage.delete(doc.stored_filename or "")
         collections = [
             "student_profiles",
             "subjects",
