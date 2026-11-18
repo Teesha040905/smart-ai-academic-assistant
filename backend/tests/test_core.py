@@ -6,7 +6,7 @@ import os
 
 os.environ["MONGODB_URL"] = "mongodb://localhost:27017"
 os.environ["MONGODB_DB"] = "smart_academic_test"
-os.environ["JWT_SECRET"] = "test-secret-key-for-pytest"
+os.environ["JWT_SECRET"] = "test-secret-key-for-pytest-0123456789abcdef"
 os.environ["AI_API_KEY"] = ""
 os.environ["UPLOAD_DIR"] = "./test_uploads"
 
@@ -34,6 +34,9 @@ def client(tmp_path, monkeypatch):
     close_client()
     db_module._client = None
 
+    from app.core import rate_limit
+
+    rate_limit.reset()
     client_mongo = get_client()
     client_mongo.drop_database("smart_academic_test")
     ensure_indexes(client_mongo["smart_academic_test"])
@@ -411,3 +414,72 @@ def test_export_conversation_pdf(client):
     r = client.get(f"/api/v1/ai/conversations/{conv['id']}/pdf", headers=h)
     assert r.status_code == 200, r.text
     assert r.content[:4] == b"%PDF"
+
+
+def test_login_lockout_after_repeated_wrong_passwords(client):
+    _register(client)
+    for _ in range(5):
+        r = client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "WrongPass1!"})
+        assert r.status_code == 401
+    # 6th attempt is blocked even with the correct password
+    r = client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "Password123!"})
+    assert r.status_code == 429, r.text
+    assert r.json()["code"] == "rate_limited"
+    # other accounts are unaffected
+    _register(client, email="b@test.com")
+    assert client.post("/api/v1/auth/login", json={"email": "b@test.com", "password": "Password123!"}).status_code == 200
+
+
+def test_successful_login_resets_failure_count(client):
+    _register(client)
+    for _ in range(4):
+        client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "WrongPass1!"})
+    assert client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "Password123!"}).status_code == 200
+    for _ in range(4):
+        client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "WrongPass1!"})
+    assert client.post("/api/v1/auth/login", json={"email": "a@test.com", "password": "Password123!"}).status_code == 200
+
+
+def test_ai_requests_are_rate_limited_per_student(client, monkeypatch):
+    monkeypatch.setenv("AI_RATE_LIMIT_PER_MINUTE", "3")
+    get_settings.cache_clear()
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    for _ in range(3):
+        assert client.post("/api/v1/ai/summarize", json={"text": "Photosynthesis basics."}, headers=h).status_code != 429
+    r = client.post("/api/v1/ai/summarize", json={"text": "Photosynthesis basics."}, headers=h)
+    assert r.status_code == 429, r.text
+
+
+def test_password_reset_signs_out_old_sessions(client):
+    from app.core.database import get_database
+    from app.services.auth_service import AuthService
+
+    _register(client)
+    old = {"Authorization": f"Bearer {_login(client)}"}
+    assert client.get("/api/v1/auth/me", headers=old).status_code == 200
+    raw = AuthService(get_database()).request_password_reset("a@test.com")
+    r = client.post("/api/v1/auth/reset-password", json={"token": raw, "new_password": "NewPassword456!"})
+    assert r.status_code == 200, r.text
+    assert client.get("/api/v1/auth/me", headers=old).status_code == 401
+    new = {"Authorization": f"Bearer {_login(client, password='NewPassword456!')}"}
+    assert client.get("/api/v1/auth/me", headers=new).status_code == 200
+
+
+def test_token_expires_after_one_day_by_default():
+    from app.core.config import Settings
+
+    assert Settings.model_fields["access_token_expire_minutes"].default == 24 * 60
+
+
+def test_api_docs_hidden_in_production(monkeypatch):
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("JWT_SECRET", "x" * 48)
+    get_settings.cache_clear()
+    try:
+        app = create_app()
+        paths = {getattr(r, "path", "") for r in app.routes}
+        assert "/docs" not in paths and "/openapi.json" not in paths
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()

@@ -29,6 +29,8 @@ def get_current_user(
     user = repo.find_one(db, "users", {"id": user_id})
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User inactive or missing")
+    if payload.get("tv", 0) != getattr(user, "token_version", 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired, please log in again")
     return user
 
 

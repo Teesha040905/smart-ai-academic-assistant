@@ -39,7 +39,7 @@ Do the steps in this order: **Atlas → Render → Vercel → update Render CORS
    `JWT_SECRET` is generated automatically.
 4. Click **Apply**. When the deploy finishes, open
    `https://<your-service>.onrender.com/health` → it should show `"db_status":"ok"`.
-   API docs: `https://<your-service>.onrender.com/docs`.
+   (API docs at `/docs` are turned off in production for security; run the backend locally to see them.)
 
 ## 3. Frontend on Vercel
 
@@ -85,6 +85,15 @@ No GitHub secrets are required.
 - **Render free sleeps after 15 minutes without traffic.** The first request after that takes ~50 seconds. Open the backend `/health` URL a minute before a demo/viva to wake it up.
 - Atlas M0 has 512 MB. Uploaded files are stored in it, so the upload limit is set to 15 MB (`MAX_UPLOAD_MB`).
 - Changing a `NEXT_PUBLIC_*` variable on Vercel needs a **Redeploy** (it is built into the frontend).
+
+## Security built in
+
+- **Login protection:** after 5 wrong passwords an account is locked for 15 minutes; max 20 login requests per minute per IP.
+- **Sign-up limit:** 5 new accounts per hour per IP. Password reset requests are limited too.
+- **AI limits per student:** `AI_RATE_LIMIT_PER_MINUTE` (default 10) and `AI_RATE_LIMIT_PER_DAY` (default 200) protect your Gemini quota.
+- **Sessions:** login tokens expire after 1 day (`ACCESS_TOKEN_EXPIRE_MINUTES=1440`); a password reset signs out all old sessions.
+- **Headers:** strict Content-Security-Policy, anti-clickjacking, HSTS and nosniff on the website; HSTS + security headers on the API.
+- **API docs** (`/docs`) are disabled when `ENVIRONMENT=production`.
 
 ## Run the production setup locally with Docker
 

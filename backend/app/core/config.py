@@ -23,7 +23,7 @@ class Settings(BaseSettings):
 
     jwt_secret: str = "change-me-to-a-long-random-secret"
     jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 60 * 24 * 7
+    access_token_expire_minutes: int = 60 * 24  # 1 day
     bcrypt_rounds: int = 12
 
     database_url: str = ""  # legacy; unused after MongoDB migration
@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     allowed_extensions: str = "pdf,docx,pptx,ppt,txt,png,jpg,jpeg,webp"
 
     redis_url: str = "redis://localhost:6379/0"
-    rate_limit_per_minute: int = 60
+    rate_limit_enabled: bool = True
+    # Per student: AI tutor messages, quiz/flashcard/plan generation, summaries, uploads
+    ai_rate_limit_per_minute: int = 10
+    ai_rate_limit_per_day: int = 200
 
     @property
     def is_production(self) -> bool:

@@ -43,7 +43,8 @@ class AuthService:
 
     def issue_token(self, user: Doc) -> str:
         role = user.role.value if hasattr(user.role, "value") else user.role
-        return create_access_token(user.id, extra={"role": role})
+        # "tv" = token version; bumping it on the user (password reset) invalidates old tokens
+        return create_access_token(user.id, extra={"role": role, "tv": getattr(user, "token_version", 0)})
 
     def get_user_with_profile(self, user_id: str) -> Doc:
         user = repo.find_one(self.db, "users", {"id": user_id})
@@ -88,12 +89,16 @@ class AuthService:
     def reset_password(self, raw_token: str, new_password: str) -> None:
         token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
         token = repo.find_one(self.db, "password_reset_tokens", {"token_hash": token_hash, "used": False})
-        if not token or token.expires_at < datetime.now(timezone.utc):
+        expires_at = token.expires_at if token else None
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)  # MongoDB returns naive UTC datetimes
+        if not token or expires_at < datetime.now(timezone.utc):
             raise AppError("Invalid or expired reset token", status_code=400)
         user = repo.find_one(self.db, "users", {"id": token.user_id})
         if not user:
             raise AppError("User not found", status_code=404)
         user.hashed_password = hash_password(new_password)
+        user.token_version = getattr(user, "token_version", 0) + 1  # sign out all sessions
         repo.save(self.db, "users", user)
         token.used = True
         repo.save(self.db, "password_reset_tokens", token)

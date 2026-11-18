@@ -9,7 +9,9 @@ from pymongo.database import Database
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core import rate_limit
 from app.core.deps import get_current_user
+from app.core.rate_limit import limit_ai_by_user
 from app.core.errors import AppError
 from app.core.logging import get_logger
 from app.models import make_assignment, make_exam
@@ -100,20 +102,36 @@ def _rec_out(r) -> RecommendationOut:
 
 
 # ── Auth ──────────────────────────────────────────────
-@router.post("/auth/register", response_model=UserOut)
+@router.post(
+    "/auth/register",
+    response_model=UserOut,
+    dependencies=[Depends(rate_limit.limit_by_ip("register", 5, 3600))],
+)
 def register(data: RegisterRequest, db: Database = Depends(get_db)):
     user = AuthService(db).register(data)
     return AuthService(db).get_user_with_profile(user.id)
 
 
-@router.post("/auth/login", response_model=TokenResponse)
+@router.post(
+    "/auth/login",
+    response_model=TokenResponse,
+    dependencies=[Depends(rate_limit.limit_by_ip("login", 20, 60))],
+)
 def login(data: LoginRequest, db: Database = Depends(get_db)):
+    # Per-account lockout after repeated wrong passwords (cannot be bypassed by changing IP)
+    rate_limit.check_login_allowed(data.email)
     svc = AuthService(db)
-    user = svc.authenticate(data.email, data.password)
+    try:
+        user = svc.authenticate(data.email, data.password)
+    except AppError as exc:
+        if exc.status_code == 401:
+            rate_limit.record_login_failure(data.email)
+        raise
+    rate_limit.record_login_success(data.email)
     return TokenResponse(access_token=svc.issue_token(user))
 
 
-@router.post("/auth/forgot-password")
+@router.post("/auth/forgot-password", dependencies=[Depends(rate_limit.limit_by_ip("forgot", 5, 900))])
 def forgot_password(data: ForgotPasswordRequest, db: Database = Depends(get_db)):
     token = AuthService(db).request_password_reset(data.email)
     # Never return the token: anyone could reset any account by knowing its email.
@@ -123,7 +141,7 @@ def forgot_password(data: ForgotPasswordRequest, db: Database = Depends(get_db))
     return {"detail": "If that email exists, a reset link was generated."}
 
 
-@router.post("/auth/reset-password")
+@router.post("/auth/reset-password", dependencies=[Depends(rate_limit.limit_by_ip("reset", 10, 900))])
 def reset_password(data: ResetPasswordRequest, db: Database = Depends(get_db)):
     AuthService(db).reset_password(data.token, data.new_password)
     return {"detail": "Password updated"}
@@ -252,7 +270,7 @@ async def upload_document(
     subject_id: Optional[str] = Form(None),
     unit_id: Optional[str] = Form(None),
     topic_id: Optional[str] = Form(None),
-    user: Doc = Depends(get_current_user),
+    user: Doc = Depends(limit_ai_by_user),
     db: Database = Depends(get_db),
 ):
     return await DocumentService(db).upload(
@@ -339,7 +357,7 @@ def delete_conversation(
 def chat_message(
     conversation_id: str,
     data: ChatMessageCreate,
-    user: Doc = Depends(get_current_user),
+    user: Doc = Depends(limit_ai_by_user),
     db: Database = Depends(get_db),
 ):
     return ChatService(db).send_message(user, conversation_id, data)
@@ -362,7 +380,7 @@ def export_conversation_pdf(
 
 
 @router.post("/ai/summarize")
-def summarize(data: SummarizeRequest, user: Doc = Depends(get_current_user), db: Database = Depends(get_db)):
+def summarize(data: SummarizeRequest, user: Doc = Depends(limit_ai_by_user), db: Database = Depends(get_db)):
     text = data.text or ""
     if data.document_id:
         chunks = repo.find_many(
@@ -440,7 +458,7 @@ def update_session(
 # ── Quizzes / Flashcards ──────────────────────────────
 @router.post("/ai/quiz", response_model=QuizOut)
 def generate_quiz(
-    data: QuizGenerateRequest, user: Doc = Depends(get_current_user), db: Database = Depends(get_db)
+    data: QuizGenerateRequest, user: Doc = Depends(limit_ai_by_user), db: Database = Depends(get_db)
 ):
     quiz = QuizService(db).generate(user, data)
     questions = getattr(quiz, "questions", None) or repo.find_many(db, "quiz_questions", {"quiz_id": quiz.id})
@@ -493,7 +511,7 @@ def submit_quiz(
 
 @router.post("/ai/flashcards", response_model=list[FlashcardOut])
 def generate_flashcards(
-    data: FlashcardGenerateRequest, user: Doc = Depends(get_current_user), db: Database = Depends(get_db)
+    data: FlashcardGenerateRequest, user: Doc = Depends(limit_ai_by_user), db: Database = Depends(get_db)
 ):
     return FlashcardService(db).generate(user, data)
 
