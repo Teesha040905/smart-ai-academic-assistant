@@ -2,15 +2,9 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { Caveat } from "next/font/google";
+import { caveat } from "@/lib/fonts";
 import { useAuth } from "@/lib/auth";
 import { DashboardMockup } from "./DashboardMockup";
-
-const caveat = Caveat({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-});
 
 const NAV = [
   { href: "#features", label: "Features" },
@@ -242,8 +236,6 @@ export function LandingPage() {
           </ol>
         </div>
       </section>
-
-
 
       {/* About */}
       <section id="about" className="px-5 py-20 sm:px-8 sm:py-24 bg-white shadow-sm border-t border-slate-200 mt-10">

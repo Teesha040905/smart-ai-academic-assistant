@@ -1,19 +1,7 @@
 import type { Metadata, Viewport } from "next";
-import { DM_Sans, Source_Serif_4 } from "next/font/google";
+import { dmSans, sourceSerif } from "@/lib/fonts";
 import { Providers } from "@/components/providers";
 import "./globals.css";
-
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-  display: "swap",
-});
-
-const sourceSerif = Source_Serif_4({
-  subsets: ["latin"],
-  variable: "--font-serif",
-  display: "swap",
-});
 
 export const viewport: Viewport = {
   width: "device-width",

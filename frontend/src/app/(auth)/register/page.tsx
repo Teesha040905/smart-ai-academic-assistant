@@ -2,15 +2,9 @@
 
 import Link from "next/link";
 import { FormEvent, useState } from "react";
-import { Caveat } from "next/font/google";
+import { caveat } from "@/lib/fonts";
 import { useAuth } from "@/lib/auth";
 import { LoginBroIllustration } from "@/components/landing/LoginBroIllustration";
-
-const caveat = Caveat({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-});
 
 export default function RegisterPage() {
   const { register } = useAuth();

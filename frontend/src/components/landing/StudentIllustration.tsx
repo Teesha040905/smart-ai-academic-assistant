@@ -1,12 +1,6 @@
 "use client";
 
-import { Caveat } from "next/font/google";
-
-const caveat = Caveat({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-});
+import { caveat } from "@/lib/fonts";
 
 export function StudentIllustration() {
   return (
