@@ -62,7 +62,15 @@ jobs:
       - name: Build
         env:
           NEXT_PUBLIC_API_URL: /api/v1
-        run: npm run build
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee build.log || {
+            # Surface the error as an annotation so it is visible on the run summary
+            msg=$(tail -n 40 build.log | sed 's/%/%25/g' | sed ':a;N;$!ba;s/
+/%0A/g')
+            echo "::error title=Frontend build failed::${msg}"
+            exit 1
+          }
 
   docker:
     name: Docker images build
