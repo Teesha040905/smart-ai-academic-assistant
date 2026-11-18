@@ -13,7 +13,7 @@ class Settings(BaseSettings):
 
     app_name: str = "Smart AI Academic Assistant"
     environment: str = "development"
-    debug: bool | str = True
+    debug: bool = True
     frontend_url: str = "http://localhost:3000"
     backend_url: str = "http://localhost:8000"
     cors_origins: str = "http://localhost:3000"

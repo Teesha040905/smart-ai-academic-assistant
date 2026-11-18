@@ -16,6 +16,7 @@ def setup_logging() -> None:
     # Quiet noisy libs
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("chromadb").setLevel(logging.WARNING)
+    logging.getLogger("pymongo").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:
