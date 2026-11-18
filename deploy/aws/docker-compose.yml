@@ -1,0 +1,52 @@
+# AWS EC2 deployment: frontend + backend + Caddy (automatic HTTPS) on one server.
+# Database: MongoDB Atlas (set MONGODB_URL in .env).
+#
+#   cd ~/app/deploy/aws
+#   sudo docker compose up -d --build
+services:
+  api:
+    build: ../../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      # Same storage mode as Render, so both deployments can share one Atlas database
+      FILE_STORAGE: gridfs
+      VECTOR_STORE: mongo
+      UPLOAD_DIR: /tmp/uploads
+    expose:
+      - "8000" # only reachable inside Docker; Caddy is the public entry point
+
+  frontend:
+    build:
+      context: ../../frontend
+      args:
+        # Browser calls the same domain; Caddy routes /api/* to the backend
+        NEXT_PUBLIC_API_URL: /api/v1
+        BACKEND_INTERNAL_URL: http://api:8000
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      - api
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in deploy/aws/.env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # keeps the HTTPS certificate across restarts
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:

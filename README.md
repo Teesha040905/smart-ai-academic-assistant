@@ -58,6 +58,8 @@ npm run dev
 
 Live deployment (Vercel + Render + MongoDB Atlas, all free tiers) and CI/CD are described step by step in [docs/deployment.md](docs/deployment.md).
 
+To learn AWS, the app can also run on a single EC2 server with Docker and automatic HTTPS: [docs/deploy-aws.md](docs/deploy-aws.md).
+
 ## Demo scenario
 
 Seeded student (B.Tech Computer Engineering, Semester 6):
