@@ -402,3 +402,12 @@ def test_production_requires_strong_jwt_secret(monkeypatch):
     finally:
         monkeypatch.undo()
         get_settings.cache_clear()
+
+
+def test_export_conversation_pdf(client):
+    _register(client)
+    h = {"Authorization": f"Bearer {_login(client)}"}
+    conv = client.post("/api/v1/ai/conversations", json={"title": "Export test"}, headers=h).json()
+    r = client.get(f"/api/v1/ai/conversations/{conv['id']}/pdf", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.content[:4] == b"%PDF"
