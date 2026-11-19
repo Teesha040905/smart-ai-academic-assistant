@@ -34,7 +34,12 @@ You now get an email the moment anything costs money.
 
 ## Step 1 — Choose region
 
-Top-right of the console → select **Asia Pacific (Mumbai) ap-south-1**. Use the same region for every step.
+Top-right of the console → select **Asia Pacific (Mumbai) ap-south-1** (closest to India). Use the same region for every step.
+
+> **AWS Free-plan accounts are locked to one region** (shown as "Your project is assigned to …").
+> If switching shows *Region unavailable*, just use the assigned region (e.g. Sydney) — everything
+> works the same, only slightly slower from India. Do **not** click *Activate advanced features*;
+> that upgrades to a paid plan.
 
 ## Step 2 — Launch the EC2 server (5 min)
 
@@ -89,6 +94,15 @@ Fill in (same values as on Render):
 
 Save: **Ctrl+O**, **Enter**, then **Ctrl+X**.
 
+Rules for `.env`: one `KEY=value` per line, no spaces around `=`, no quotes, nothing else on the
+line, and comment lines must keep their leading `#`.
+
+Check it without showing secrets (prints the URL with the password masked):
+
+```bash
+grep '^MONGODB_URL=' ~/app/deploy/aws/.env | sed -E 's|(mongodb\+srv://[^:]*:)[^@]*@|*****@|'
+```
+
 ## Step 7 — Start the app (10–15 min first time)
 
 ```bash
@@ -132,7 +146,10 @@ bash ~/app/deploy/aws/update.sh
 | Certificate error | Wait 1–2 min after first start; `sudo docker compose logs caddy` |
 | `db_status: unreachable` / `bad auth` | Check `MONGODB_URL` in `.env`, then `sudo docker compose up -d` |
 | Build killed / very slow | Swap is missing: `free -h` should show 2 GB swap; re-run the setup script |
-| Changed `.env` | `cd ~/app/deploy/aws && sudo docker compose up -d` |
+| Changed `.env` | `cd ~/app/deploy/aws && sudo docker compose up -d --force-recreate api` |
+| `api` keeps **Restarting**, site shows **502** | `sudo docker compose logs api --tail 20` — `bad auth` = wrong password in `MONGODB_URL` (copy the exact value that works on Render); `Invalid URI scheme` = extra text in the `MONGODB_URL` line |
+| `failed to read .env: unexpected character` | a comment line lost its `#` or a line has extra text — fix that line in `nano` |
+| "System restart required" after login | Ubuntu installed updates; run `sudo reboot` (the app starts again automatically) |
 
 ## Cost notes
 
