@@ -100,7 +100,7 @@ line, and comment lines must keep their leading `#`.
 Check it without showing secrets (prints the URL with the password masked):
 
 ```bash
-grep '^MONGODB_URL=' ~/app/deploy/aws/.env | sed -E 's|(mongodb\+srv://[^:]*:)[^@]*@|*****@|'
+grep '^MONGODB_URL=' ~/app/deploy/aws/.env | sed -E 's|(mongodb\+srv://[^:]*:)[^@]*@|\1*****@|'
 ```
 
 ## Step 7 — Start the app (10–15 min first time)
